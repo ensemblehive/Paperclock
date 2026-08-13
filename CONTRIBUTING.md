@@ -14,3 +14,7 @@ turning the project into a document platform.
 
 The Python path is intentionally dependency-light. New packages need a concrete
 reason that the standard library cannot reasonably cover.
+
+For scan-session changes, test both a fresh file and an unchanged cached file.
+The local index belongs in `.paperclock/`; never commit it or place raw document
+bodies in its session metadata. Short result excerpts are cached intentionally.

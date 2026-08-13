@@ -3,6 +3,7 @@
 # dependencies
 /node_modules
 /.venv/
+/.paperclock/
 *.egg-info/
 __pycache__/
 *.py[cod]

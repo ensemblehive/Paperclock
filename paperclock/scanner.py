@@ -7,6 +7,30 @@ from .models import Commitment, SourceFile
 from .readers import UnreadableFile, decode_upload
 
 
+def scan_file(
+    item: dict[str, object],
+    *,
+    today: date | None = None,
+    month_first: bool = False,
+) -> tuple[list[dict[str, object]], int, str | None]:
+    today = today or date.today()
+    path = str(item.get("path") or "untitled")
+    if item.get("skip_reason"):
+        return [], 0, str(item["skip_reason"])
+    try:
+        content = decode_upload(item)
+    except UnreadableFile as exc:
+        return [], 0, str(exc)
+    if not content:
+        return [], 0, f"{path}: empty file"
+    extraction = extract_commitments(
+        SourceFile(path=path, content=content, modified=_optional_string(item.get("modified"))),
+        today,
+        month_first,
+    )
+    return [commitment.as_dict() for commitment in extraction.commitments], extraction.candidates, None
+
+
 def scan_files(
     files: list[dict[str, object]],
     *,
@@ -19,23 +43,14 @@ def scan_files(
     candidates = 0
     scanned = 0
 
-    for item in files[:500]:
-        path = str(item.get("path") or "untitled")
-        try:
-            content = decode_upload(item)
-        except UnreadableFile as exc:
-            errors.append(str(exc))
-            continue
-        if not content:
+    for item in files:
+        found, reviewed, warning = scan_file(item, today=today, month_first=month_first)
+        if warning:
+            errors.append(warning)
             continue
         scanned += 1
-        extraction = extract_commitments(
-            SourceFile(path=path, content=content, modified=_optional_string(item.get("modified"))),
-            today,
-            month_first,
-        )
-        candidates += extraction.candidates
-        commitments.extend(extraction.commitments)
+        candidates += reviewed
+        commitments.extend(Commitment(**item) for item in found)
 
     commitments = _deduplicate(commitments)
     commitments.sort(key=lambda item: (item.date, -item.confidence, item.source))

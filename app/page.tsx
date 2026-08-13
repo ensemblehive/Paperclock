@@ -24,13 +24,22 @@ type Commitment = {
 };
 
 type ScanResult = {
+  scan_id: string;
+  status: "running" | "cancelled" | "complete";
   today: string;
+  total: number;
   files_scanned: number;
+  files_processed: number;
+  files_cached: number;
   files_skipped: number;
+  files_pending: number;
   dates_reviewed: number;
   noise_removed: number;
   commitments: Commitment[];
   warnings: string[];
+  rate: number;
+  eta_seconds: number | null;
+  resumed?: boolean;
 };
 
 type UploadFile = {
@@ -38,6 +47,22 @@ type UploadFile = {
   content: string;
   encoding: "text" | "base64";
   modified: string;
+  size?: number;
+};
+
+type ScanEntry = {
+  path: string;
+  size: number;
+  modified: string;
+  fingerprint: string;
+  file?: File;
+  prepared?: UploadFile;
+};
+
+type ScanActivity = {
+  active: boolean;
+  phase: "indexing" | "reading" | "finishing" | "cancelled" | "complete";
+  current: string;
 };
 
 const categoryNames: Record<string, string> = {
@@ -65,26 +90,32 @@ const demoFiles = (): UploadFile[] => [
     content: `Your fixed-rate energy plan renews automatically on ${isoOffset(38)}. Cancel before ${isoOffset(10)} to avoid the new variable rate.\nStatement date: ${isoOffset(-12)}.`,
     encoding: "text",
     modified: new Date().toISOString(),
+    size: 140,
   },
   {
     path: "Work/vendor-notes.md",
     content: `## Atlas rollout\n- Security review must be submitted by ${isoOffset(21)}.\n- Production certificate expires ${isoOffset(67)}.\n- Kickoff completed on ${isoOffset(-40)}.`,
     encoding: "text",
     modified: new Date().toISOString(),
+    size: 190,
   },
   {
     path: "Receipts/camera-warranty.txt",
     content: `Purchase date: ${isoOffset(-280)}\nExtended coverage is valid until ${isoOffset(45)}. File any repair claim before that date.`,
     encoding: "text",
     modified: new Date().toISOString(),
+    size: 130,
   },
 ];
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const lastEntriesRef = useRef<ScanEntry[]>([]);
   const [engineOnline, setEngineOnline] = useState<boolean | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [activity, setActivity] = useState<ScanActivity | null>(null);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("all");
@@ -110,28 +141,89 @@ export default function Home() {
     });
   }, [dismissed, filter, result]);
 
-  async function runScan(files: UploadFile[]) {
-    if (!files.length) {
+  async function runScan(entries: ScanEntry[]) {
+    if (!entries.length) {
       setError("No supported files found. Try PDF, DOCX, email, Markdown, CSV, or plain text.");
       return;
     }
+    lastEntriesRef.current = entries;
     setLoading(true);
     setError("");
     setDismissed(new Set());
+    setActivity({ active: true, phase: "indexing", current: "Building a lightweight file map" });
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const response = await fetch(`${ENGINE}/api/scan`, {
+      const scanKey = await makeScanKey(entries);
+      const startResponse = await fetch(`${ENGINE}/api/scans/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files, date_order: dateOrder }),
+        body: JSON.stringify({ scan_key: scanKey, total: entries.length, date_order: dateOrder }),
+        signal: controller.signal,
       });
-      if (!response.ok) throw new Error("The local engine could not read that folder.");
-      setResult(await response.json());
+      if (!startResponse.ok) throw new Error("The local engine could not start that scan.");
+      let snapshot = await startResponse.json() as ScanResult;
+      setResult(snapshot);
       setEngineOnline(true);
-    } catch {
+
+      const needed = new Set<string>();
+      for (const manifest of chunk(entries, 400)) {
+        const response = await fetch(`${ENGINE}/api/scans/${snapshot.scan_id}/manifest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files: manifest.map(({ path, size, modified, fingerprint }) => ({ path, size, modified, fingerprint })) }),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("The local engine could not index those files.");
+        const payload = await response.json() as { needed: string[]; progress: ScanResult };
+        payload.needed.forEach((fingerprint) => needed.add(fingerprint));
+        snapshot = payload.progress;
+        setResult(snapshot);
+      }
+
+      const pending = entries.filter((entry) => needed.has(entry.fingerprint));
+      const batches = makeUploadBatches(pending);
+      for (let index = 0; index < batches.length; index += 1) {
+        const batch = batches[index];
+        setActivity({
+          active: true,
+          phase: "reading",
+          current: batch.length === 1 ? batch[0].path : `${batch[0].path} + ${batch.length - 1} more`,
+        });
+        const files = await Promise.all(batch.map(serializeEntry));
+        const response = await fetch(`${ENGINE}/api/scans/${snapshot.scan_id}/batch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files, date_order: dateOrder }),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("A file batch could not be read.");
+        snapshot = await response.json();
+        setResult(snapshot);
+      }
+
+      setActivity({ active: true, phase: "finishing", current: "Removing duplicates and ordering the horizon" });
+      const finishResponse = await fetch(`${ENGINE}/api/scans/${snapshot.scan_id}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        signal: controller.signal,
+      });
+      if (!finishResponse.ok) throw new Error("The scan could not be finalized.");
+      snapshot = await finishResponse.json();
+      setResult(snapshot);
+      setActivity({ active: false, phase: "complete", current: "Your horizon is ready" });
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        setActivity((current) => current ? { ...current, active: false, phase: "cancelled", current: "Scan paused safely" } : null);
+        return;
+      }
       setEngineOnline(false);
-      setError("Paperclock’s local engine isn’t running. Start it with ./run.sh, then try again.");
+      setError(caught instanceof Error ? caught.message : "Paperclock’s local engine isn’t running. Start it with ./run.sh, then try again.");
+      setActivity(null);
     } finally {
       setLoading(false);
+      abortRef.current = null;
     }
   }
 
@@ -139,8 +231,8 @@ export default function Home() {
     setLoading(true);
     setError("");
     try {
-      const files = await serializeFiles(Array.from(fileList));
-      await runScan(files);
+      const entries = prepareEntries(Array.from(fileList));
+      await runScan(entries);
     } catch (caught) {
       setLoading(false);
       setError(caught instanceof Error ? caught.message : "Those files could not be prepared.");
@@ -156,6 +248,22 @@ export default function Home() {
   function onInput(event: ChangeEvent<HTMLInputElement>) {
     if (event.target.files) void handleFiles(event.target.files);
     event.target.value = "";
+  }
+
+  async function cancelScan() {
+    const scanId = result?.scan_id;
+    abortRef.current?.abort();
+    if (!scanId) return;
+    try {
+      const response = await fetch(`${ENGINE}/api/scans/${scanId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (response.ok) setResult(await response.json());
+    } catch {
+      // The active request was already stopped; the next selection will reuse cached work.
+    }
   }
 
   async function downloadCalendar() {
@@ -221,13 +329,13 @@ export default function Home() {
             />
             <div className="dropzone__icon" aria-hidden="true"><span>↓</span></div>
             <div>
-              <strong>{loading ? "Listening to the paper trail…" : "Drop a folder here"}</strong>
-              <span>or <button onClick={() => inputRef.current?.click()}>choose one</button> · up to 500 files</span>
+              <strong>{loading ? "Mapping the paper trail…" : "Drop a folder here"}</strong>
+              <span>or <button onClick={() => inputRef.current?.click()}>choose one</button> · any number of files</span>
             </div>
             <div className="format-row"><span>PDF</span><span>DOCX</span><span>EMAIL</span><span>TEXT</span><span>CALENDAR</span></div>
           </div>
           <div className="landing__footer">
-            <button className="demo-button" disabled={loading} onClick={() => void runScan(demoFiles())}>
+            <button className="demo-button" disabled={loading} onClick={() => void runScan(prepareDemoEntries(demoFiles()))}>
               <span className="play">▶</span> Try the 10-second demo
             </button>
             <div className="date-order" aria-label="Numeric date order">
@@ -252,6 +360,9 @@ export default function Home() {
           downloadCalendar={() => void downloadCalendar()}
           loading={loading}
           error={error}
+          activity={activity}
+          cancelScan={() => void cancelScan()}
+          resumeScan={() => void runScan(lastEntriesRef.current)}
         />
       )}
       {result && (
@@ -271,6 +382,7 @@ export default function Home() {
 
 function Results({
   result, visible, filter, setFilter, dismiss, rescan, downloadCalendar, loading, error,
+  activity, cancelScan, resumeScan,
 }: {
   result: ScanResult;
   visible: Commitment[];
@@ -281,6 +393,9 @@ function Results({
   downloadCalendar: () => void;
   loading: boolean;
   error: string;
+  activity: ScanActivity | null;
+  cancelScan: () => void;
+  resumeScan: () => void;
 }) {
   const today = new Date(`${result.today}T12:00:00`);
   const nearest = result.commitments.find((item) => new Date(`${item.date}T12:00:00`) >= today);
@@ -310,10 +425,13 @@ function Results({
       </aside>
 
       <div className="timeline-panel">
+        {activity && activity.phase !== "complete" && (
+          <ScanProgress result={result} activity={activity} cancelScan={cancelScan} resumeScan={resumeScan} />
+        )}
         <div className="timeline-head">
           <div>
             <p className="section-kicker">Your horizon</p>
-            <h1>What needs attention</h1>
+            <h1>{activity?.active ? "Reading your horizon" : "What needs attention"}</h1>
           </div>
           <div className="filters" aria-label="Filter commitments">
             {[["all", "All"], ["soon", "Next 30 days"], ["expiry", "Expiries"], ["money", "Money"]].map(([value, label]) => (
@@ -325,7 +443,13 @@ function Results({
         {result.warnings.length > 0 && (
           <details className="warnings"><summary>{result.files_skipped} files skipped</summary>{result.warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>
         )}
-        {visible.length === 0 ? (
+        {visible.length === 0 && activity?.active ? (
+          <div className="waiting-state">
+            <div className="waiting-papers" aria-hidden="true"><i /><i /><i /></div>
+            <h3>Dates will appear here as they’re found</h3>
+            <p>Paperclock is reading in small batches, so the interface stays responsive.</p>
+          </div>
+        ) : visible.length === 0 ? (
           <div className="empty-state"><span>○</span><h3>No commitments in this view</h3><p>Try another filter or scan a different folder.</p></div>
         ) : (
           <div className="groups">
@@ -344,6 +468,43 @@ function Results({
           <span>Human judgment still wins—open the source before acting.</span>
         </footer>
       </div>
+    </section>
+  );
+}
+
+function ScanProgress({
+  result, activity, cancelScan, resumeScan,
+}: {
+  result: ScanResult;
+  activity: ScanActivity;
+  cancelScan: () => void;
+  resumeScan: () => void;
+}) {
+  const percent = result.total ? Math.min(100, Math.round((result.files_processed / result.total) * 100)) : 0;
+  const phaseLabel = activity.phase === "indexing" ? "Indexing" : activity.phase === "finishing" ? "Finishing" : activity.phase === "cancelled" ? "Paused" : "Reading";
+  return (
+    <section className={`scan-progress scan-progress--${activity.phase}`} aria-live="polite">
+      <div className="scan-progress__clock" aria-hidden="true"><i /><i /><b /></div>
+      <div className="scan-progress__body">
+        <div className="scan-progress__top">
+          <span>{phaseLabel}</span>
+          <strong>{percent}%</strong>
+        </div>
+        <p>{activity.current}</p>
+        <div className="progress-track"><i style={{ width: `${percent}%` }} /></div>
+        <div className="scan-progress__facts">
+          <span><b>{result.files_processed.toLocaleString()}</b> of {result.total.toLocaleString()} files</span>
+          <span><b>{result.commitments.length}</b> commitments found</span>
+          {result.files_cached > 0 && <span><b>{result.files_cached}</b> unchanged</span>}
+          {result.rate > 0 && activity.active && <span>{result.rate.toFixed(1)} files/sec</span>}
+          {result.eta_seconds !== null && result.eta_seconds > 2 && activity.active && <span>about {formatEta(result.eta_seconds)} left</span>}
+        </div>
+      </div>
+      {activity.active ? (
+        <button className="scan-control" onClick={cancelScan}>Pause</button>
+      ) : activity.phase === "cancelled" ? (
+        <button className="scan-control scan-control--resume" onClick={resumeScan}>Resume</button>
+      ) : null}
     </section>
   );
 }
@@ -377,24 +538,93 @@ function CommitmentCard({ item, today, dismiss }: { item: Commitment; today: Dat
   );
 }
 
-async function serializeFiles(files: File[]): Promise<UploadFile[]> {
-  const supported = files.filter((file) => {
+function prepareEntries(files: File[]): ScanEntry[] {
+  return files.filter((file) => {
     const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
     return TEXT_TYPES.has(extension) || BINARY_TYPES.has(extension);
-  }).slice(0, 500);
-  const total = supported.reduce((sum, file) => sum + file.size, 0);
-  if (total > 24 * 1024 * 1024) throw new Error("That selection is over 24 MB. Try a smaller folder.");
-
-  return Promise.all(supported.map(async (file) => {
-    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-    const binary = BINARY_TYPES.has(extension);
+  }).map((file) => {
+    const path = file.webkitRelativePath || file.name;
+    const modified = new Date(file.lastModified).toISOString();
     return {
-      path: file.webkitRelativePath || file.name,
-      content: binary ? await fileToBase64(file) : await file.text(),
-      encoding: binary ? "base64" as const : "text" as const,
-      modified: new Date(file.lastModified).toISOString(),
+      path,
+      size: file.size,
+      modified,
+      fingerprint: `${path}\u0000${file.size}\u0000${file.lastModified}`,
+      file,
     };
+  });
+}
+
+function prepareDemoEntries(files: UploadFile[]): ScanEntry[] {
+  return files.map((file) => ({
+    path: file.path,
+    size: file.size ?? file.content.length,
+    modified: file.modified,
+    fingerprint: `${file.path}\u0000${file.content.length}\u0000${file.modified}`,
+    prepared: file,
   }));
+}
+
+async function serializeEntry(entry: ScanEntry): Promise<UploadFile & { fingerprint: string; skip_reason?: string }> {
+  if (entry.prepared) return { ...entry.prepared, fingerprint: entry.fingerprint };
+  if (!entry.file) throw new Error(`Could not read ${entry.path}`);
+  if (entry.file.size > 8 * 1024 * 1024) {
+    return {
+      path: entry.path,
+      content: "",
+      encoding: "text",
+      modified: entry.modified,
+      fingerprint: entry.fingerprint,
+      skip_reason: `${entry.path}: larger than the 8 MB per-file safety limit`,
+    };
+  }
+  const extension = entry.file.name.split(".").pop()?.toLowerCase() ?? "";
+  const binary = BINARY_TYPES.has(extension);
+  return {
+    path: entry.path,
+    content: binary ? await fileToBase64(entry.file) : await entry.file.text(),
+    encoding: binary ? "base64" : "text",
+    modified: entry.modified,
+    fingerprint: entry.fingerprint,
+  };
+}
+
+function makeUploadBatches(entries: ScanEntry[]): ScanEntry[][] {
+  const batches: ScanEntry[][] = [];
+  let current: ScanEntry[] = [];
+  let bytes = 0;
+  for (const entry of entries) {
+    const estimated = Math.min(entry.size, 8 * 1024 * 1024);
+    if (current.length >= 8 || (current.length > 0 && bytes + estimated > 18 * 1024 * 1024)) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(entry);
+    bytes += estimated;
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+}
+
+async function makeScanKey(entries: ScanEntry[]) {
+  const root = entries[0]?.path.split("/")[0] ?? "folder";
+  let checksum = 2166136261;
+  let totalBytes = 0;
+  for (const entry of entries) {
+    totalBytes += entry.size;
+    for (let index = 0; index < entry.fingerprint.length; index += 1) {
+      checksum ^= entry.fingerprint.charCodeAt(index);
+      checksum = Math.imul(checksum, 16777619);
+    }
+  }
+  return `${root}:${entries.length}:${totalBytes}:${checksum >>> 0}`;
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -430,4 +660,12 @@ function groupCommitments(items: Commitment[], today: Date) {
     (days < 0 ? buckets[0] : days <= 30 ? buckets[1] : buckets[2]).items.push(item);
   }
   return buckets.filter((bucket) => bucket.items.length);
+}
+
+function formatEta(seconds: number) {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} sec`;
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.ceil((seconds % 3600) / 60);
+  return `${hours} hr ${minutes} min`;
 }

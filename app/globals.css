@@ -192,6 +192,7 @@ a { color: inherit; text-decoration: none; }
   background: var(--paper-light);
 }
 .dropzone__icon span { color: var(--orange); font-size: 26px; transform: translateY(-2px); }
+.dropzone:has(.dropzone__icon + div strong:first-child) .dropzone__icon { transform-origin: center; }
 .dropzone strong { display: block; text-align: left; margin-bottom: 7px; font-size: 17px; letter-spacing: -0.02em; }
 .dropzone div > span { display: block; color: var(--muted); text-align: left; font-size: 12px; }
 .dropzone div > span button { border: 0; padding: 0; background: transparent; color: var(--orange-dark); text-decoration: underline; cursor: pointer; }
@@ -330,6 +331,115 @@ a { color: inherit; text-decoration: none; }
 .summary__actions p { margin: 12px 0 0; color: #8a8880; font-size: 8px; line-height: 1.5; text-align: center; }
 
 .timeline-panel { padding: 54px clamp(32px, 6vw, 90px) 28px; min-width: 0; }
+
+.scan-progress {
+  min-height: 124px;
+  margin: -25px 0 42px;
+  padding: 19px 18px;
+  border: 1px solid #c8c3b8;
+  background: rgba(250, 248, 242, 0.72);
+  box-shadow: 5px 5px 0 #dfdbd0;
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  align-items: center;
+  gap: 20px;
+  position: relative;
+  overflow: hidden;
+}
+.scan-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.55) 48%, transparent 61%);
+  transform: translateX(-120%);
+  animation: paper-sweep 2.8s ease-in-out infinite;
+}
+.scan-progress--cancelled::after { animation: none; }
+
+.scan-progress__clock {
+  width: 58px;
+  height: 58px;
+  border: 1.5px solid #8e9488;
+  border-radius: 50%;
+  position: relative;
+  background: var(--paper-light);
+  box-shadow: inset 0 0 0 5px #ece9e0;
+}
+.scan-progress__clock::before {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  left: 24.5px;
+  top: 24.5px;
+  background: var(--orange);
+  z-index: 2;
+}
+.scan-progress__clock i {
+  width: 1.5px;
+  position: absolute;
+  left: 27px;
+  bottom: 28px;
+  background: var(--ink);
+  transform-origin: bottom;
+}
+.scan-progress__clock i:first-child { height: 18px; animation: clock-hand 2.2s linear infinite; }
+.scan-progress__clock i:nth-child(2) { height: 14px; animation: clock-hand 13.2s linear infinite; }
+.scan-progress__clock b {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--yellow);
+  top: 5px;
+  left: 26px;
+}
+.scan-progress--cancelled .scan-progress__clock i { animation-play-state: paused; }
+
+.scan-progress__body { min-width: 0; }
+.scan-progress__top { display: flex; align-items: center; justify-content: space-between; }
+.scan-progress__top span { color: var(--orange-dark); font-family: var(--font-mono), monospace; font-size: 8px; letter-spacing: .12em; text-transform: uppercase; }
+.scan-progress__top strong { font-family: var(--font-mono), monospace; font-size: 13px; font-weight: 500; }
+.scan-progress__body > p { margin: 7px 0 11px; overflow: hidden; color: #4f514b; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+
+.progress-track { height: 3px; background: #d9d5cb; overflow: hidden; }
+.progress-track i { display: block; height: 100%; min-width: 3px; background: var(--orange); transition: width 300ms ease; }
+.scan-progress--finishing .progress-track i { background: var(--sage); }
+
+.scan-progress__facts { min-height: 17px; margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px 15px; color: #85837b; font-family: var(--font-mono), monospace; font-size: 7px; }
+.scan-progress__facts b { color: var(--ink); font-weight: 500; }
+.scan-control { min-width: 67px; border: 1px solid #a9a59b; background: transparent; padding: 8px 11px; font-size: 9px; cursor: pointer; position: relative; z-index: 1; }
+.scan-control:hover { border-color: var(--orange); color: var(--orange-dark); }
+.scan-control--resume { border-color: var(--ink); background: var(--ink); color: var(--paper-light); }
+
+.waiting-state { padding: 80px 20px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); text-align: center; }
+.waiting-state h3 { margin: 21px 0 5px; font-family: var(--font-serif), Georgia, serif; font-size: 27px; font-weight: 400; }
+.waiting-state p { margin: 0; color: var(--muted); font-size: 10px; }
+.waiting-papers { width: 70px; height: 45px; margin: 0 auto; position: relative; }
+.waiting-papers i {
+  position: absolute;
+  width: 40px;
+  height: 30px;
+  border: 1px solid #aaa69c;
+  background: var(--paper-light);
+  left: 15px;
+  top: 8px;
+  transform-origin: 50% 120%;
+  animation: paper-read 1.8s ease-in-out infinite;
+}
+.waiting-papers i:nth-child(2) { animation-delay: -1.2s; }
+.waiting-papers i:nth-child(3) { animation-delay: -.6s; }
+.waiting-papers i::after { content: ""; position: absolute; left: 7px; right: 7px; top: 9px; height: 1px; background: var(--orange); box-shadow: 0 5px 0 var(--rule), 0 10px 0 var(--rule); }
+
+@keyframes clock-hand { to { transform: rotate(360deg); } }
+@keyframes paper-sweep { 0%, 20% { transform: translateX(-120%); } 70%, 100% { transform: translateX(120%); } }
+@keyframes paper-read {
+  0%, 12% { opacity: 0; transform: translateY(10px) rotate(-4deg); }
+  30%, 72% { opacity: 1; transform: translateY(0) rotate(0); }
+  100% { opacity: 0; transform: translateY(-10px) rotate(4deg); }
+}
 .timeline-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-bottom: 41px; }
 .timeline-head h1 { margin: 0; font-family: var(--font-serif), Georgia, serif; font-size: clamp(42px, 4.3vw, 65px); font-weight: 400; line-height: 0.94; letter-spacing: -0.045em; }
 
@@ -443,6 +553,14 @@ a { color: inherit; text-decoration: none; }
   .summary { display: block; padding: 34px 22px; }
   .summary__actions { margin-top: 34px; }
   .timeline-panel { padding: 38px 18px 20px; }
+  .scan-progress { margin: -16px 0 34px; grid-template-columns: 49px 1fr; gap: 13px; padding: 16px 13px; }
+  .scan-progress__clock { width: 46px; height: 46px; }
+  .scan-progress__clock::before { left: 19px; top: 19px; }
+  .scan-progress__clock i { left: 21.5px; bottom: 23px; }
+  .scan-progress__clock i:first-child { height: 14px; }
+  .scan-progress__clock i:nth-child(2) { height: 11px; }
+  .scan-progress__clock b { left: 20px; }
+  .scan-control { grid-column: 1 / -1; width: 100%; }
   .timeline-head { display: block; margin-bottom: 30px; }
   .filters { margin-top: 25px; overflow-x: auto; }
   .filters button { flex: 1; }

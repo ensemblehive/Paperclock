@@ -33,8 +33,10 @@ You need Python 3.11+ and Node 22+.
 ```
 
 Open [http://localhost:3000](http://localhost:3000), drop a folder, or click the
-10-second demo. The first run creates `.venv/` and installs the one Python parsing
-dependency plus the UI packages, all inside this project.
+10-second demo. Folder scans have no file-count ceiling: files are indexed first,
+then read in bounded batches so memory stays predictable. The first run creates
+`.venv/` and installs the one Python parsing dependency plus the UI packages, all
+inside this project.
 
 Prefer a terminal?
 
@@ -49,32 +51,40 @@ Prefer a terminal?
 - email (`.eml`) and calendar (`.ics`)
 - Markdown, plain text, CSV, JSON, YAML, TOML, HTML, XML, RTF, and logs
 
-Files are capped at 8 MB each and browser scans at 24 MB total. Unsupported and
-unreadable files are skipped with a visible reason.
+Individual files are capped at 8 MB as a safety guard, but the folder itself can
+contain any number of files. Unsupported, oversized, and unreadable files are
+skipped with a visible reason.
 
 ## How it works
 
-The Python pipeline extracts text, recognizes explicit and relative dates, scores
-the nearby language for action words, down-ranks historical metadata, explains the
-decision, and removes duplicates. Numeric dates are never guessed silently: choose
-day-first or month-first in the interface, and ambiguous results stay marked.
+The browser sends a lightweight manifest in chunks. Python checks its local SQLite
+index, immediately restores unchanged results, and reads only new or modified files
+through a bounded worker pool. Results stream into the timeline batch by batch with
+real counts, speed, estimated time, current file, and cache hits. A scan can be
+paused and resumed without throwing away completed work.
+
+The extraction pipeline recognizes explicit and relative dates, scores nearby
+language for action words, down-ranks historical metadata, explains each decision,
+and removes duplicates. Numeric dates are never guessed silently: choose day-first
+or month-first in the interface, and ambiguous results stay marked.
 
 There is no trained model and no telemetry. [`pypdf`](https://pypi.org/project/pypdf/)
 is the only Python dependency; PDF parsing is the one piece not worth reinventing.
 
 ```text
 browser folder picker
-        │  file contents over loopback only
-        ▼
-Python HTTP service ── readers → date extraction → relevance scoring
         │
-        └────────────── timeline JSON / standards-compliant .ics
+        ├── chunked manifest ── local SQLite index ── unchanged results
+        │
+        └── bounded file batches ── Python reader pool
+                                      │
+                                      └── live timeline / .ics export
 ```
 
 ## Project map
 
 ```text
-paperclock/          Python engine, readers, server, CLI, calendar export
+paperclock/          Python engine, readers, scan index, server, CLI, calendar export
 app/                 small React interface
 tests/               Python behavior tests + production bundle smoke test
 public/              static brand assets
@@ -109,6 +119,8 @@ isolated in [`paperclock/readers.py`](paperclock/readers.py). See
 - Scanned or image-only PDFs need OCR first.
 - Relative phrases use the file modification time as their anchor; copied files
   can therefore deserve a manual check.
+- Browsers cannot reopen a folder after a full page refresh without permission.
+  Choose the same folder again and Paperclock will reuse its indexed work.
 - Paperclock is a radar, not legal or financial advice. Confirm the source before
   acting on a date.
 
