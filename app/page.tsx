@@ -191,7 +191,7 @@ export default function Home() {
             <span className="engine__dot" />
             {engineOnline === null ? "Finding local engine" : engineOnline ? "Local engine ready" : "Engine offline"}
           </span>
-          <a href="https://github.com" className="source-link">Open source <span aria-hidden="true">↗</span></a>
+          <span className="source-link">MIT · open source</span>
         </div>
       </header>
 
