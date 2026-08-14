@@ -8,6 +8,8 @@ const TEXT_TYPES = new Set([
   "ini", "cfg", "html", "htm", "xml", "eml", "ics", "rtf", "log",
 ]);
 const BINARY_TYPES = new Set(["pdf", "docx"]);
+const DISCOVERY_CONCURRENCY = 8;
+const ENUMERATION_CHUNK = 250;
 
 type Commitment = {
   id: string;
@@ -82,6 +84,23 @@ type LegacyEntry = {
 type DroppedSource = {
   handlePromise?: Promise<FileSystemHandleLike | null>;
   entry?: LegacyEntry | null;
+  fallbackFile?: File | null;
+};
+
+type DroppedSelection = {
+  sources: DroppedSource[];
+  fallbackFiles: File[];
+};
+
+type DiscoveryProgress = {
+  discovered: number;
+  supported: number;
+  currentPath: string;
+};
+
+type DiscoveryResult = {
+  files: IncomingFile[];
+  discovered: number;
 };
 
 type ScanActivity = {
@@ -184,7 +203,7 @@ export default function Home() {
       detail: "Checking what has changed before reading file contents",
       filePercent: null,
     });
-    await letBrowserPaint();
+    await waitForFirstPaint();
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -234,7 +253,7 @@ export default function Home() {
           detail: "Preparing this batch locally",
           filePercent: 0,
         });
-        await letBrowserPaint();
+        await waitForFirstPaint();
         const body = await prepareBatchInWorker(batch, dateOrder, controller.signal, (progress) => {
           const withinFile = progress.total ? progress.loaded / progress.total : 1;
           const batchPercent = Math.round(((progress.index + withinFile) / progress.count) * 100);
@@ -255,7 +274,7 @@ export default function Home() {
             : "Python is checking date context and removing noise",
           filePercent: null,
         });
-        await letBrowserPaint();
+        await waitForFirstPaint();
         const response = await fetch(`${ENGINE}/api/scans/${snapshot.scan_id}/batch`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -292,7 +311,11 @@ export default function Home() {
     }
   }
 
-  async function handleFiles(incomingFiles: IncomingFile[], feedbackAlreadyVisible = false) {
+  async function handleFiles(
+    incomingFiles: IncomingFile[],
+    feedbackAlreadyVisible = false,
+    discoveredCount = incomingFiles.length,
+  ) {
     setLoading(true);
     setError("");
     if (!feedbackAlreadyVisible) {
@@ -305,7 +328,7 @@ export default function Home() {
       });
     }
     try {
-      await letBrowserPaint();
+      await waitForFirstPaint();
       const entries = await prepareEntries(incomingFiles, (processed, total) => {
         setActivity({
           active: true,
@@ -319,8 +342,8 @@ export default function Home() {
         setLoading(false);
         setActivity(null);
         setError(
-          incomingFiles.length
-            ? `Paperclock found ${incomingFiles.length.toLocaleString()} ${incomingFiles.length === 1 ? "file" : "files"}, but none had a supported extension. Try PDF, DOCX, EML, ICS, Markdown, CSV, JSON, or plain text.`
+          discoveredCount
+            ? `Paperclock found ${discoveredCount.toLocaleString()} ${discoveredCount === 1 ? "file" : "files"}, but none had a supported extension. Try PDF, DOCX, EML, ICS, Markdown, CSV, JSON, or plain text.`
             : "Paperclock could not open that dropped folder. Use “choose a folder” to select it through the folder picker.",
         );
         return;
@@ -336,9 +359,9 @@ export default function Home() {
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
-    const items = Array.from(event.dataTransfer.items);
-    const fallbackFiles = Array.from(event.dataTransfer.files);
-    const sources = captureDroppedSources(items);
+    // Capture protected drag handles inside the drop event, but never flatten a
+    // modern directory's FileList before the first frame can be painted.
+    const selection = captureDroppedSelection(event.dataTransfer);
     setLoading(true);
     setError("");
     setActivity({
@@ -350,17 +373,17 @@ export default function Home() {
     });
     void (async () => {
       try {
-        await letBrowserPaint();
-        const incoming = await collectDroppedFiles(sources, fallbackFiles, (count, currentPath) => {
+        await waitForFirstPaint();
+        const discovery = await collectDroppedFiles(selection, ({ discovered, supported, currentPath }) => {
           setActivity({
             active: true,
             phase: "preparing",
             current: "Discovering files in the dropped folder",
-            detail: `${count.toLocaleString()} ${count === 1 ? "file" : "files"} found${currentPath ? ` · ${currentPath}` : ""}`,
+            detail: `${discovered.toLocaleString()} found · ${supported.toLocaleString()} supported${currentPath ? ` · ${currentPath}` : ""}`,
             filePercent: null,
           });
         });
-        await handleFiles(incoming, true);
+        await handleFiles(discovery.files, true, discovery.discovered);
       } catch {
         setLoading(false);
         setActivity(null);
@@ -370,14 +393,40 @@ export default function Home() {
   }
 
   function onInput(event: ChangeEvent<HTMLInputElement>) {
-    if (event.target.files) {
-      const incoming = Array.from(event.target.files).map((file) => ({
-        file,
-        relativePath: file.webkitRelativePath || file.name,
-      }));
-      void handleFiles(incoming);
-    }
-    event.target.value = "";
+    const input = event.currentTarget;
+    const fileList = input.files;
+    if (!fileList) return;
+    setLoading(true);
+    setError("");
+    setActivity({
+      active: true,
+      phase: "preparing",
+      current: "Folder received",
+      detail: "Starting local discovery now",
+      filePercent: null,
+    });
+    void (async () => {
+      try {
+        await waitForFirstPaint();
+        const total = fileList.length;
+        const incoming = await snapshotInputFiles(fileList, (processed) => {
+          setActivity({
+            active: true,
+            phase: "preparing",
+            current: "Receiving file names from the browser",
+            detail: `${processed.toLocaleString()} of ${total.toLocaleString()} received`,
+            filePercent: total ? Math.round((processed / total) * 100) : 100,
+          });
+        });
+        input.value = "";
+        await handleFiles(incoming, true, total);
+      } catch (caught) {
+        input.value = "";
+        setLoading(false);
+        setActivity(null);
+        setError(caught instanceof Error ? caught.message : "That folder could not be opened.");
+      }
+    })();
   }
 
   async function cancelScan() {
@@ -458,8 +507,8 @@ export default function Home() {
             />
             <div className="dropzone__icon" aria-hidden="true"><span>↓</span></div>
             <div>
-              <strong>{loading ? "Mapping the paper trail…" : "Drop a folder here"}</strong>
-              <span>or <button onClick={() => inputRef.current?.click()}>choose a folder</button> · any number of files</span>
+              <strong>{dragging ? "Release to scan this folder" : loading ? "Mapping the paper trail…" : "Drop a folder here"}</strong>
+              <span>{dragging ? "Paperclock is ready" : <>or <button onClick={() => inputRef.current?.click()}>choose a folder</button> · any number of files</>}</span>
             </div>
             <div className="format-row"><span>PDF</span><span>DOCX</span><span>EMAIL</span><span>TEXT</span><span>CALENDAR</span></div>
           </div>
@@ -702,86 +751,143 @@ async function prepareEntries(files: IncomingFile[], onProgress: (processed: num
     }
     if ((index + 1) % 300 === 0 || index === files.length - 1) {
       onProgress(index + 1, files.length);
-      await letBrowserPaint();
+      await yieldToMainThread();
     }
   }
   return entries;
 }
 
-async function collectDroppedFiles(
-  sources: DroppedSource[],
-  fallbackFiles: File[],
-  onProgress: (count: number, currentPath: string) => void,
+async function snapshotInputFiles(
+  fileList: FileList,
+  onProgress: (processed: number) => void,
 ): Promise<IncomingFile[]> {
+  const files: IncomingFile[] = [];
+  for (let index = 0; index < fileList.length; index += 1) {
+    const file = fileList.item(index);
+    if (file) files.push({ file, relativePath: file.webkitRelativePath || file.name });
+    if ((index + 1) % ENUMERATION_CHUNK === 0 || index === fileList.length - 1) {
+      onProgress(index + 1);
+      await yieldToMainThread();
+    }
+  }
+  return files;
+}
+
+async function collectDroppedFiles(
+  selection: DroppedSelection,
+  onProgress: (progress: DiscoveryProgress) => void,
+): Promise<DiscoveryResult> {
   const collected: IncomingFile[] = [];
+  let discovered = 0;
+  let supported = 0;
   let lastPaint = performance.now();
 
-  const addFile = async (file: File, relativePath: string) => {
-    collected.push({ file, relativePath: relativePath || file.name });
+  const visitFile = async (name: string, relativePath: string, load: () => Promise<File>) => {
+    discovered += 1;
+    const accepted = isSupportedFileName(name);
+    if (accepted) supported += 1;
     const now = performance.now();
-    if (collected.length === 1 || collected.length % 100 === 0 || now - lastPaint > 80) {
-      onProgress(collected.length, relativePath);
+    if (discovered === 1 || discovered % 100 === 0 || now - lastPaint > 80) {
+      onProgress({ discovered, supported, currentPath: relativePath });
       lastPaint = now;
-      await letBrowserPaint();
+      await yieldToMainThread();
     }
+    if (!accepted) return;
+    const file = await load();
+    collected.push({ file, relativePath: relativePath || file.name });
   };
 
-  let usedDirectoryApi = false;
-  for (const source of sources) {
+  let traversedSource = false;
+  for (const source of selection.sources) {
     if (source.handlePromise) {
       const handle = await source.handlePromise;
       if (handle) {
-        usedDirectoryApi = true;
-        await walkHandle(handle, "", addFile);
+        traversedSource = true;
+        await walkHandle(handle, "", visitFile);
+      } else if (source.fallbackFile) {
+        traversedSource = true;
+        const file = source.fallbackFile;
+        await visitFile(file.name, file.name, async () => file);
       }
       continue;
     }
     if (source.entry) {
-      usedDirectoryApi = true;
-      await walkLegacyEntry(source.entry, "", addFile);
+      traversedSource = true;
+      await walkLegacyEntry(source.entry, "", visitFile);
+    } else if (source.fallbackFile) {
+      traversedSource = true;
+      const file = source.fallbackFile;
+      await visitFile(file.name, file.name, async () => file);
     }
   }
 
-  if (!usedDirectoryApi || !collected.length) {
-    for (const file of fallbackFiles) await addFile(file, file.webkitRelativePath || file.name);
+  if (!traversedSource) {
+    for (const file of selection.fallbackFiles) {
+      const path = file.webkitRelativePath || file.name;
+      await visitFile(file.name, path, async () => file);
+    }
   }
-  onProgress(collected.length, "");
-  return collected;
+  onProgress({ discovered, supported, currentPath: "" });
+  return { files: collected, discovered };
 }
 
-function captureDroppedSources(items: DataTransferItem[]): DroppedSource[] {
-  return items.map((item) => {
+function captureDroppedSelection(dataTransfer: DataTransfer): DroppedSelection {
+  const sources: DroppedSource[] = [];
+  let hasEntryApi = false;
+  for (let index = 0; index < dataTransfer.items.length; index += 1) {
+    const item = dataTransfer.items[index];
+    if (item.kind !== "file") continue;
+    const fallbackFile = item.getAsFile();
     const getHandle = (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandleLike | null> }).getAsFileSystemHandle;
-    if (getHandle) return { handlePromise: getHandle.call(item).catch(() => null) };
+    if (getHandle) {
+      hasEntryApi = true;
+      sources.push({ handlePromise: getHandle.call(item).catch(() => null), fallbackFile });
+      continue;
+    }
     const getEntry = (item as DataTransferItem & { webkitGetAsEntry?: () => LegacyEntry | null }).webkitGetAsEntry;
-    return { entry: getEntry ? getEntry.call(item) : null };
-  });
+    const entry = getEntry ? getEntry.call(item) : null;
+    if (entry) hasEntryApi = true;
+    sources.push({ entry, fallbackFile });
+  }
+  return {
+    sources,
+    // This synchronous compatibility path is used only by browsers without a
+    // directory-entry API. Modern folder drops avoid this potentially large copy.
+    fallbackFiles: hasEntryApi ? [] : Array.from(dataTransfer.files),
+  };
 }
 
 async function walkHandle(
   handle: FileSystemHandleLike,
   parentPath: string,
-  addFile: (file: File, relativePath: string) => Promise<void>,
+  visitFile: (name: string, relativePath: string, load: () => Promise<File>) => Promise<void>,
 ): Promise<void> {
   const path = parentPath ? `${parentPath}/${handle.name}` : handle.name;
   if (handle.kind === "file" && handle.getFile) {
-    await addFile(await handle.getFile(), path);
+    await visitFile(handle.name, path, () => handle.getFile!());
     return;
   }
   if (handle.kind === "directory" && handle.values) {
-    for await (const child of handle.values()) await walkHandle(child, path, addFile);
+    let pending: Promise<void>[] = [];
+    for await (const child of handle.values()) {
+      pending.push(walkHandle(child, path, visitFile));
+      if (pending.length === DISCOVERY_CONCURRENCY) {
+        await Promise.all(pending);
+        pending = [];
+      }
+    }
+    await Promise.all(pending);
   }
 }
 
 async function walkLegacyEntry(
   entry: LegacyEntry,
   parentPath: string,
-  addFile: (file: File, relativePath: string) => Promise<void>,
+  visitFile: (name: string, relativePath: string, load: () => Promise<File>) => Promise<void>,
 ): Promise<void> {
   const path = parentPath ? `${parentPath}/${entry.name}` : entry.name;
   if (entry.isFile && entry.file) {
-    const file = await new Promise<File>((resolve, reject) => entry.file?.(resolve, reject));
-    await addFile(file, path);
+    await visitFile(entry.name, path, () => new Promise<File>((resolve, reject) => entry.file?.(resolve, reject)));
     return;
   }
   if (entry.isDirectory && entry.createReader) {
@@ -789,9 +895,20 @@ async function walkLegacyEntry(
     while (true) {
       const children = await new Promise<LegacyEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
       if (!children.length) break;
-      for (const child of children) await walkLegacyEntry(child, path, addFile);
+      for (let index = 0; index < children.length; index += DISCOVERY_CONCURRENCY) {
+        await Promise.all(
+          children
+            .slice(index, index + DISCOVERY_CONCURRENCY)
+            .map((child) => walkLegacyEntry(child, path, visitFile)),
+        );
+      }
     }
   }
+}
+
+function isSupportedFileName(name: string): boolean {
+  const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  return TEXT_TYPES.has(extension) || BINARY_TYPES.has(extension);
 }
 
 function prepareDemoEntries(files: UploadFile[]): ScanEntry[] {
@@ -843,7 +960,7 @@ async function makeScanKey(entries: ScanEntry[], onProgress: (processed: number,
     const processed = entryIndex + 1;
     if (processed % 500 === 0 || processed === entries.length) {
       onProgress(processed, entries.length);
-      await letBrowserPaint();
+      await yieldToMainThread();
     }
   }
   return `${root}:${entries.length}:${totalBytes}:${checksum >>> 0}`;
@@ -887,8 +1004,14 @@ function prepareBatchInWorker(
   });
 }
 
-function letBrowserPaint(): Promise<void> {
+function waitForFirstPaint(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+}
+
+function yieldToMainThread(): Promise<void> {
+  const scheduler = (globalThis as typeof globalThis & { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (scheduler?.yield) return scheduler.yield();
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function formatBytes(bytes: number) {

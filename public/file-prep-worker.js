@@ -8,6 +8,7 @@ self.onmessage = async (event) => {
     const files = [];
     for (let index = 0; index < entries.length; index += 1) {
       const entry = entries[index];
+      report(entry, index, entries.length, 0, entry.size, true);
       if (entry.prepared) {
         files.push({ ...entry.prepared, fingerprint: entry.fingerprint });
         report(entry, index, entries.length, entry.size, entry.size);
@@ -95,9 +96,9 @@ function bytesToBase64(bytes) {
   return encoded.join("");
 }
 
-function report(entry, index, count, loaded, total) {
+function report(entry, index, count, loaded, total, force = false) {
   const now = performance.now();
-  if (loaded < total && now - lastProgressAt < 80) return;
+  if (!force && loaded < total && now - lastProgressAt < 80) return;
   lastProgressAt = now;
   self.postMessage({ type: "progress", path: entry.path, index, count, loaded, total });
 }

@@ -62,6 +62,9 @@ yielding chunks. Large file encoding runs inside a dedicated browser worker with
 byte-level progress, keeping the interface and its animations responsive.
 Dropped folders are traversed recursively through the browser's directory-entry
 API; the folder picker is available as a compatibility fallback.
+The first status frame is painted before enumeration begins, supported files are
+filtered before metadata reads, and directory metadata is fetched with bounded
+concurrency so very large selections never monopolize the interface.
 
 The browser sends a lightweight manifest in chunks. Python checks its local SQLite
 index, immediately restores unchanged results, and reads only new or modified files

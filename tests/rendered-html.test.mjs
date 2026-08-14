@@ -12,5 +12,8 @@ test("production bundle contains the Paperclock product copy", async () => {
   assert.match(source, /getAsFileSystemHandle/);
   assert.match(source, /webkitGetAsEntry/);
   assert.match(source, /readEntries/);
+  assert.match(source, /DISCOVERY_CONCURRENCY/);
+  assert.doesNotMatch(source, /Array\.from\(event\.dataTransfer\.files\)/);
+  assert.doesNotMatch(source, /Array\.from\(event\.target\.files\)/);
   assert.ok(manifest.length > 0 || source.includes("Paperclock"));
 });

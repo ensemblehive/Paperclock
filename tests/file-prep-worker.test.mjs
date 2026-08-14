@@ -47,4 +47,5 @@ test("background worker prepares binary files without touching the main thread",
   assert.equal(payload.files[0].encoding, "base64");
   assert.equal(payload.files[0].content, Buffer.from(bytes).toString("base64"));
   assert.ok(messages.some((message) => message.type === "progress"));
+  assert.equal(messages[0].loaded, 0, "the worker must acknowledge a file before its first read");
 });
