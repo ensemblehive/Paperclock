@@ -59,6 +59,31 @@ type ScanEntry = {
   prepared?: UploadFile;
 };
 
+type IncomingFile = {
+  file: File;
+  relativePath: string;
+};
+
+type FileSystemHandleLike = {
+  kind: "file" | "directory";
+  name: string;
+  getFile?: () => Promise<File>;
+  values?: () => AsyncIterable<FileSystemHandleLike>;
+};
+
+type LegacyEntry = {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  file?: (success: (file: File) => void, failure: (error: DOMException) => void) => void;
+  createReader?: () => { readEntries: (success: (entries: LegacyEntry[]) => void, failure: (error: DOMException) => void) => void };
+};
+
+type DroppedSource = {
+  handlePromise?: Promise<FileSystemHandleLike | null>;
+  entry?: LegacyEntry | null;
+};
+
 type ScanActivity = {
   active: boolean;
   phase: "preparing" | "indexing" | "reading" | "finishing" | "cancelled" | "complete";
@@ -267,19 +292,21 @@ export default function Home() {
     }
   }
 
-  async function handleFiles(fileList: FileList | File[]) {
+  async function handleFiles(incomingFiles: IncomingFile[], feedbackAlreadyVisible = false) {
     setLoading(true);
     setError("");
-    setActivity({
-      active: true,
-      phase: "preparing",
-      current: "Opening the folder safely",
-      detail: "Paperclock has received your selection",
-      filePercent: 0,
-    });
+    if (!feedbackAlreadyVisible) {
+      setActivity({
+        active: true,
+        phase: "preparing",
+        current: "Opening the folder safely",
+        detail: "Paperclock has received your selection",
+        filePercent: 0,
+      });
+    }
     try {
       await letBrowserPaint();
-      const entries = await prepareEntries(Array.from(fileList), (processed, total) => {
+      const entries = await prepareEntries(incomingFiles, (processed, total) => {
         setActivity({
           active: true,
           phase: "preparing",
@@ -291,7 +318,11 @@ export default function Home() {
       if (!entries.length) {
         setLoading(false);
         setActivity(null);
-        setError("No supported files found. Try PDF, DOCX, email, Markdown, CSV, or plain text.");
+        setError(
+          incomingFiles.length
+            ? `Paperclock found ${incomingFiles.length.toLocaleString()} ${incomingFiles.length === 1 ? "file" : "files"}, but none had a supported extension. Try PDF, DOCX, EML, ICS, Markdown, CSV, JSON, or plain text.`
+            : "Paperclock could not open that dropped folder. Use “choose a folder” to select it through the folder picker.",
+        );
         return;
       }
       await runScan(entries);
@@ -305,11 +336,47 @@ export default function Home() {
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
-    void handleFiles(event.dataTransfer.files);
+    const items = Array.from(event.dataTransfer.items);
+    const fallbackFiles = Array.from(event.dataTransfer.files);
+    const sources = captureDroppedSources(items);
+    setLoading(true);
+    setError("");
+    setActivity({
+      active: true,
+      phase: "preparing",
+      current: "Discovering files in the dropped folder",
+      detail: "0 files found so far",
+      filePercent: null,
+    });
+    void (async () => {
+      try {
+        await letBrowserPaint();
+        const incoming = await collectDroppedFiles(sources, fallbackFiles, (count, currentPath) => {
+          setActivity({
+            active: true,
+            phase: "preparing",
+            current: "Discovering files in the dropped folder",
+            detail: `${count.toLocaleString()} ${count === 1 ? "file" : "files"} found${currentPath ? ` · ${currentPath}` : ""}`,
+            filePercent: null,
+          });
+        });
+        await handleFiles(incoming, true);
+      } catch {
+        setLoading(false);
+        setActivity(null);
+        setError("That folder could not be read. Use “choose a folder” to select it through the folder picker.");
+      }
+    })();
   }
 
   function onInput(event: ChangeEvent<HTMLInputElement>) {
-    if (event.target.files) void handleFiles(event.target.files);
+    if (event.target.files) {
+      const incoming = Array.from(event.target.files).map((file) => ({
+        file,
+        relativePath: file.webkitRelativePath || file.name,
+      }));
+      void handleFiles(incoming);
+    }
     event.target.value = "";
   }
 
@@ -388,12 +455,11 @@ export default function Home() {
               // @ts-expect-error webkitdirectory is supported by Chromium and Safari.
               webkitdirectory=""
               onChange={onInput}
-              accept=".pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml,.html,.eml,.ics,.rtf,.log"
             />
             <div className="dropzone__icon" aria-hidden="true"><span>↓</span></div>
             <div>
               <strong>{loading ? "Mapping the paper trail…" : "Drop a folder here"}</strong>
-              <span>or <button onClick={() => inputRef.current?.click()}>choose one</button> · any number of files</span>
+              <span>or <button onClick={() => inputRef.current?.click()}>choose a folder</button> · any number of files</span>
             </div>
             <div className="format-row"><span>PDF</span><span>DOCX</span><span>EMAIL</span><span>TEXT</span><span>CALENDAR</span></div>
           </div>
@@ -404,8 +470,10 @@ export default function Home() {
                 <strong>{activity.current}</strong>
                 <small>{activity.detail}</small>
               </div>
-              <b>{activity.filePercent ?? 0}%</b>
-              <div className="preflight__track"><i style={{ width: `${activity.filePercent ?? 2}%` }} /></div>
+              <b>{activity.filePercent === null || activity.filePercent === undefined ? "…" : `${activity.filePercent}%`}</b>
+              <div className={`preflight__track ${activity.filePercent === null || activity.filePercent === undefined ? "preflight__track--indeterminate" : ""}`}>
+                <i style={activity.filePercent === null || activity.filePercent === undefined ? undefined : { width: `${activity.filePercent}%` }} />
+              </div>
             </div>
           )}
           <div className="landing__footer">
@@ -616,13 +684,13 @@ function CommitmentCard({ item, today, dismiss }: { item: Commitment; today: Dat
   );
 }
 
-async function prepareEntries(files: File[], onProgress: (processed: number, total: number) => void): Promise<ScanEntry[]> {
+async function prepareEntries(files: IncomingFile[], onProgress: (processed: number, total: number) => void): Promise<ScanEntry[]> {
   const entries: ScanEntry[] = [];
   for (let index = 0; index < files.length; index += 1) {
-    const file = files[index];
+    const { file, relativePath } = files[index];
     const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
     if (TEXT_TYPES.has(extension) || BINARY_TYPES.has(extension)) {
-      const path = file.webkitRelativePath || file.name;
+      const path = relativePath || file.webkitRelativePath || file.name;
       const modified = new Date(file.lastModified).toISOString();
       entries.push({
         path,
@@ -638,6 +706,92 @@ async function prepareEntries(files: File[], onProgress: (processed: number, tot
     }
   }
   return entries;
+}
+
+async function collectDroppedFiles(
+  sources: DroppedSource[],
+  fallbackFiles: File[],
+  onProgress: (count: number, currentPath: string) => void,
+): Promise<IncomingFile[]> {
+  const collected: IncomingFile[] = [];
+  let lastPaint = performance.now();
+
+  const addFile = async (file: File, relativePath: string) => {
+    collected.push({ file, relativePath: relativePath || file.name });
+    const now = performance.now();
+    if (collected.length === 1 || collected.length % 100 === 0 || now - lastPaint > 80) {
+      onProgress(collected.length, relativePath);
+      lastPaint = now;
+      await letBrowserPaint();
+    }
+  };
+
+  let usedDirectoryApi = false;
+  for (const source of sources) {
+    if (source.handlePromise) {
+      const handle = await source.handlePromise;
+      if (handle) {
+        usedDirectoryApi = true;
+        await walkHandle(handle, "", addFile);
+      }
+      continue;
+    }
+    if (source.entry) {
+      usedDirectoryApi = true;
+      await walkLegacyEntry(source.entry, "", addFile);
+    }
+  }
+
+  if (!usedDirectoryApi || !collected.length) {
+    for (const file of fallbackFiles) await addFile(file, file.webkitRelativePath || file.name);
+  }
+  onProgress(collected.length, "");
+  return collected;
+}
+
+function captureDroppedSources(items: DataTransferItem[]): DroppedSource[] {
+  return items.map((item) => {
+    const getHandle = (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandleLike | null> }).getAsFileSystemHandle;
+    if (getHandle) return { handlePromise: getHandle.call(item).catch(() => null) };
+    const getEntry = (item as DataTransferItem & { webkitGetAsEntry?: () => LegacyEntry | null }).webkitGetAsEntry;
+    return { entry: getEntry ? getEntry.call(item) : null };
+  });
+}
+
+async function walkHandle(
+  handle: FileSystemHandleLike,
+  parentPath: string,
+  addFile: (file: File, relativePath: string) => Promise<void>,
+): Promise<void> {
+  const path = parentPath ? `${parentPath}/${handle.name}` : handle.name;
+  if (handle.kind === "file" && handle.getFile) {
+    await addFile(await handle.getFile(), path);
+    return;
+  }
+  if (handle.kind === "directory" && handle.values) {
+    for await (const child of handle.values()) await walkHandle(child, path, addFile);
+  }
+}
+
+async function walkLegacyEntry(
+  entry: LegacyEntry,
+  parentPath: string,
+  addFile: (file: File, relativePath: string) => Promise<void>,
+): Promise<void> {
+  const path = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+  if (entry.isFile && entry.file) {
+    const file = await new Promise<File>((resolve, reject) => entry.file?.(resolve, reject));
+    await addFile(file, path);
+    return;
+  }
+  if (entry.isDirectory && entry.createReader) {
+    const reader = entry.createReader();
+    while (true) {
+      const children = await new Promise<LegacyEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+      if (!children.length) break;
+      for (const child of children) await walkLegacyEntry(child, path, addFile);
+    }
+  }
 }
 
 function prepareDemoEntries(files: UploadFile[]): ScanEntry[] {

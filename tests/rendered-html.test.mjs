@@ -9,5 +9,8 @@ test("production bundle contains the Paperclock product copy", async () => {
   assert.match(source, /Nothing leaves your computer/);
   assert.match(source, /any number of files/);
   assert.match(source, /files\/sec/);
+  assert.match(source, /getAsFileSystemHandle/);
+  assert.match(source, /webkitGetAsEntry/);
+  assert.match(source, /readEntries/);
   assert.ok(manifest.length > 0 || source.includes("Paperclock"));
 });
