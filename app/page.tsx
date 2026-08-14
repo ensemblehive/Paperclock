@@ -61,8 +61,10 @@ type ScanEntry = {
 
 type ScanActivity = {
   active: boolean;
-  phase: "indexing" | "reading" | "finishing" | "cancelled" | "complete";
+  phase: "preparing" | "indexing" | "reading" | "finishing" | "cancelled" | "complete";
   current: string;
+  detail?: string;
+  filePercent?: number | null;
 };
 
 const categoryNames: Record<string, string> = {
@@ -150,11 +152,26 @@ export default function Home() {
     setLoading(true);
     setError("");
     setDismissed(new Set());
-    setActivity({ active: true, phase: "indexing", current: "Building a lightweight file map" });
+    setActivity({
+      active: true,
+      phase: "indexing",
+      current: `Indexing ${entries.length.toLocaleString()} supported ${entries.length === 1 ? "file" : "files"}`,
+      detail: "Checking what has changed before reading file contents",
+      filePercent: null,
+    });
+    await letBrowserPaint();
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const scanKey = await makeScanKey(entries);
+      const scanKey = await makeScanKey(entries, (processed, total) => {
+        setActivity({
+          active: true,
+          phase: "indexing",
+          current: "Fingerprinting file names and timestamps",
+          detail: `${processed.toLocaleString()} of ${total.toLocaleString()} indexed without opening contents`,
+          filePercent: total ? Math.round((processed / total) * 100) : 100,
+        });
+      });
       const startResponse = await fetch(`${ENGINE}/api/scans/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -187,14 +204,37 @@ export default function Home() {
         const batch = batches[index];
         setActivity({
           active: true,
+          phase: "preparing",
+          current: batch[0].path,
+          detail: "Preparing this batch locally",
+          filePercent: 0,
+        });
+        await letBrowserPaint();
+        const body = await prepareBatchInWorker(batch, dateOrder, controller.signal, (progress) => {
+          const withinFile = progress.total ? progress.loaded / progress.total : 1;
+          const batchPercent = Math.round(((progress.index + withinFile) / progress.count) * 100);
+          setActivity({
+            active: true,
+            phase: "preparing",
+            current: progress.path,
+            detail: `Preparing file ${progress.index + 1} of ${progress.count} · ${formatBytes(progress.loaded)} of ${formatBytes(progress.total)}`,
+            filePercent: batchPercent,
+          });
+        });
+        setActivity({
+          active: true,
           phase: "reading",
           current: batch.length === 1 ? batch[0].path : `${batch[0].path} + ${batch.length - 1} more`,
+          detail: batch.some((entry) => entry.path.toLowerCase().endsWith(".pdf"))
+            ? "Python is extracting pages and checking date context"
+            : "Python is checking date context and removing noise",
+          filePercent: null,
         });
-        const files = await Promise.all(batch.map(serializeEntry));
+        await letBrowserPaint();
         const response = await fetch(`${ENGINE}/api/scans/${snapshot.scan_id}/batch`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ files, date_order: dateOrder }),
+          body,
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("A file batch could not be read.");
@@ -202,7 +242,7 @@ export default function Home() {
         setResult(snapshot);
       }
 
-      setActivity({ active: true, phase: "finishing", current: "Removing duplicates and ordering the horizon" });
+      setActivity({ active: true, phase: "finishing", current: "Removing duplicates and ordering the horizon", filePercent: null });
       const finishResponse = await fetch(`${ENGINE}/api/scans/${snapshot.scan_id}/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -218,7 +258,7 @@ export default function Home() {
         setActivity((current) => current ? { ...current, active: false, phase: "cancelled", current: "Scan paused safely" } : null);
         return;
       }
-      setEngineOnline(false);
+      if (caught instanceof TypeError) setEngineOnline(false);
       setError(caught instanceof Error ? caught.message : "Paperclock’s local engine isn’t running. Start it with ./run.sh, then try again.");
       setActivity(null);
     } finally {
@@ -230,11 +270,34 @@ export default function Home() {
   async function handleFiles(fileList: FileList | File[]) {
     setLoading(true);
     setError("");
+    setActivity({
+      active: true,
+      phase: "preparing",
+      current: "Opening the folder safely",
+      detail: "Paperclock has received your selection",
+      filePercent: 0,
+    });
     try {
-      const entries = prepareEntries(Array.from(fileList));
+      await letBrowserPaint();
+      const entries = await prepareEntries(Array.from(fileList), (processed, total) => {
+        setActivity({
+          active: true,
+          phase: "preparing",
+          current: "Checking supported file types",
+          detail: `${processed.toLocaleString()} of ${total.toLocaleString()} names checked`,
+          filePercent: total ? Math.round((processed / total) * 100) : 100,
+        });
+      });
+      if (!entries.length) {
+        setLoading(false);
+        setActivity(null);
+        setError("No supported files found. Try PDF, DOCX, email, Markdown, CSV, or plain text.");
+        return;
+      }
       await runScan(entries);
     } catch (caught) {
       setLoading(false);
+      setActivity(null);
       setError(caught instanceof Error ? caught.message : "Those files could not be prepared.");
     }
   }
@@ -312,7 +375,7 @@ export default function Home() {
             hiding across a folder—then gives you one calm timeline.
           </p>
           <div
-            className={`dropzone ${dragging ? "dropzone--active" : ""}`}
+            className={`dropzone ${dragging ? "dropzone--active" : ""} ${loading ? "dropzone--loading" : ""}`}
             onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
             onDragOver={(event) => event.preventDefault()}
             onDragLeave={() => setDragging(false)}
@@ -334,6 +397,17 @@ export default function Home() {
             </div>
             <div className="format-row"><span>PDF</span><span>DOCX</span><span>EMAIL</span><span>TEXT</span><span>CALENDAR</span></div>
           </div>
+          {loading && !result && activity && (
+            <div className="preflight" aria-live="polite">
+              <span className="preflight__pulse" aria-hidden="true"><i /><i /><i /></span>
+              <div>
+                <strong>{activity.current}</strong>
+                <small>{activity.detail}</small>
+              </div>
+              <b>{activity.filePercent ?? 0}%</b>
+              <div className="preflight__track"><i style={{ width: `${activity.filePercent ?? 2}%` }} /></div>
+            </div>
+          )}
           <div className="landing__footer">
             <button className="demo-button" disabled={loading} onClick={() => void runScan(prepareDemoEntries(demoFiles()))}>
               <span className="play">▶</span> Try the 10-second demo
@@ -481,7 +555,7 @@ function ScanProgress({
   resumeScan: () => void;
 }) {
   const percent = result.total ? Math.min(100, Math.round((result.files_processed / result.total) * 100)) : 0;
-  const phaseLabel = activity.phase === "indexing" ? "Indexing" : activity.phase === "finishing" ? "Finishing" : activity.phase === "cancelled" ? "Paused" : "Reading";
+  const phaseLabel = activity.phase === "preparing" ? "Preparing" : activity.phase === "indexing" ? "Indexing" : activity.phase === "finishing" ? "Finishing" : activity.phase === "cancelled" ? "Paused" : "Reading";
   return (
     <section className={`scan-progress scan-progress--${activity.phase}`} aria-live="polite">
       <div className="scan-progress__clock" aria-hidden="true"><i /><i /><b /></div>
@@ -491,6 +565,10 @@ function ScanProgress({
           <strong>{percent}%</strong>
         </div>
         <p>{activity.current}</p>
+        {activity.detail && <small className="scan-progress__detail">{activity.detail}</small>}
+        {activity.phase === "preparing" && activity.filePercent !== null && activity.filePercent !== undefined && (
+          <div className="file-progress"><i style={{ width: `${activity.filePercent}%` }} /></div>
+        )}
         <div className="progress-track"><i style={{ width: `${percent}%` }} /></div>
         <div className="scan-progress__facts">
           <span><b>{result.files_processed.toLocaleString()}</b> of {result.total.toLocaleString()} files</span>
@@ -538,21 +616,28 @@ function CommitmentCard({ item, today, dismiss }: { item: Commitment; today: Dat
   );
 }
 
-function prepareEntries(files: File[]): ScanEntry[] {
-  return files.filter((file) => {
+async function prepareEntries(files: File[], onProgress: (processed: number, total: number) => void): Promise<ScanEntry[]> {
+  const entries: ScanEntry[] = [];
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
     const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-    return TEXT_TYPES.has(extension) || BINARY_TYPES.has(extension);
-  }).map((file) => {
-    const path = file.webkitRelativePath || file.name;
-    const modified = new Date(file.lastModified).toISOString();
-    return {
-      path,
-      size: file.size,
-      modified,
-      fingerprint: `${path}\u0000${file.size}\u0000${file.lastModified}`,
-      file,
-    };
-  });
+    if (TEXT_TYPES.has(extension) || BINARY_TYPES.has(extension)) {
+      const path = file.webkitRelativePath || file.name;
+      const modified = new Date(file.lastModified).toISOString();
+      entries.push({
+        path,
+        size: file.size,
+        modified,
+        fingerprint: `${path}\u0000${file.size}\u0000${file.lastModified}`,
+        file,
+      });
+    }
+    if ((index + 1) % 300 === 0 || index === files.length - 1) {
+      onProgress(index + 1, files.length);
+      await letBrowserPaint();
+    }
+  }
+  return entries;
 }
 
 function prepareDemoEntries(files: UploadFile[]): ScanEntry[] {
@@ -565,37 +650,14 @@ function prepareDemoEntries(files: UploadFile[]): ScanEntry[] {
   }));
 }
 
-async function serializeEntry(entry: ScanEntry): Promise<UploadFile & { fingerprint: string; skip_reason?: string }> {
-  if (entry.prepared) return { ...entry.prepared, fingerprint: entry.fingerprint };
-  if (!entry.file) throw new Error(`Could not read ${entry.path}`);
-  if (entry.file.size > 8 * 1024 * 1024) {
-    return {
-      path: entry.path,
-      content: "",
-      encoding: "text",
-      modified: entry.modified,
-      fingerprint: entry.fingerprint,
-      skip_reason: `${entry.path}: larger than the 8 MB per-file safety limit`,
-    };
-  }
-  const extension = entry.file.name.split(".").pop()?.toLowerCase() ?? "";
-  const binary = BINARY_TYPES.has(extension);
-  return {
-    path: entry.path,
-    content: binary ? await fileToBase64(entry.file) : await entry.file.text(),
-    encoding: binary ? "base64" : "text",
-    modified: entry.modified,
-    fingerprint: entry.fingerprint,
-  };
-}
-
 function makeUploadBatches(entries: ScanEntry[]): ScanEntry[][] {
   const batches: ScanEntry[][] = [];
   let current: ScanEntry[] = [];
   let bytes = 0;
-  for (const entry of entries) {
+  for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+    const entry = entries[entryIndex];
     const estimated = Math.min(entry.size, 8 * 1024 * 1024);
-    if (current.length >= 8 || (current.length > 0 && bytes + estimated > 18 * 1024 * 1024)) {
+    if (current.length >= 6 || (current.length > 0 && bytes + estimated > 6 * 1024 * 1024)) {
       batches.push(current);
       current = [];
       bytes = 0;
@@ -613,31 +675,72 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-async function makeScanKey(entries: ScanEntry[]) {
+async function makeScanKey(entries: ScanEntry[], onProgress: (processed: number, total: number) => void) {
   const root = entries[0]?.path.split("/")[0] ?? "folder";
   let checksum = 2166136261;
   let totalBytes = 0;
-  for (const entry of entries) {
+  for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+    const entry = entries[entryIndex];
     totalBytes += entry.size;
     for (let index = 0; index < entry.fingerprint.length; index += 1) {
       checksum ^= entry.fingerprint.charCodeAt(index);
       checksum = Math.imul(checksum, 16777619);
     }
+    const processed = entryIndex + 1;
+    if (processed % 500 === 0 || processed === entries.length) {
+      onProgress(processed, entries.length);
+      await letBrowserPaint();
+    }
   }
   return `${root}:${entries.length}:${totalBytes}:${checksum >>> 0}`;
 }
 
-function fileToBase64(file: File): Promise<string> {
+function dayDifference(from: Date, to: Date) {
+  return Math.round((to.getTime() - from.getTime()) / 86_400_000);
+}
+
+type WorkerProgress = { path: string; index: number; count: number; loaded: number; total: number };
+
+function prepareBatchInWorker(
+  entries: ScanEntry[],
+  dateOrder: string,
+  signal: AbortSignal,
+  onProgress: (progress: WorkerProgress) => void,
+): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
-    reader.readAsDataURL(file);
+    const worker = new Worker("/file-prep-worker.js");
+    const stop = () => {
+      worker.terminate();
+      reject(new DOMException("Scan paused", "AbortError"));
+    };
+    signal.addEventListener("abort", stop, { once: true });
+    worker.onmessage = (event: MessageEvent<{ type: string; body?: Blob; message?: string } & WorkerProgress>) => {
+      if (event.data.type === "progress") {
+        onProgress(event.data);
+        return;
+      }
+      signal.removeEventListener("abort", stop);
+      worker.terminate();
+      if (event.data.type === "done" && event.data.body) resolve(event.data.body);
+      else reject(new Error(event.data.message ?? "A file could not be prepared."));
+    };
+    worker.onerror = () => {
+      signal.removeEventListener("abort", stop);
+      worker.terminate();
+      reject(new Error("The background file reader could not start."));
+    };
+    worker.postMessage({ entries, dateOrder });
   });
 }
 
-function dayDifference(from: Date, to: Date) {
-  return Math.round((to.getTime() - from.getTime()) / 86_400_000);
+function letBrowserPaint(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function relativeLabel(value: string, today: Date) {
