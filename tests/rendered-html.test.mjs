@@ -5,6 +5,8 @@ import test from "node:test";
 test("production bundle contains the Paperclock product copy", async () => {
   const manifest = await readFile("dist/server/manifest.json", "utf8").catch(() => "");
   const source = await readFile("app/page.tsx", "utf8");
+  const styles = await readFile("app/globals.css", "utf8");
+  const ensembleLogo = await readFile("public/ensemble.png");
   assert.match(source, /Your files know/);
   assert.match(source, /Nothing leaves your computer/);
   assert.match(source, /any number of files/);
@@ -17,6 +19,14 @@ test("production bundle contains the Paperclock product copy", async () => {
   assert.match(source, /Why Paperclock read this/);
   assert.match(source, /Open page/);
   assert.match(source, /groupDocuments/);
+  assert.match(source, /Product of <strong>Ensemble Hive/);
+  assert.match(source, /flushSync/);
+  assert.match(source, /showDirectoryPicker/);
+  assert.match(source, /overallPercent/);
+  assert.doesNotMatch(source, /MIT · open source/);
+  assert.match(styles, /height: 146px/);
+  assert.match(styles, /contain: layout paint/);
+  assert.ok(ensembleLogo.length > 1_000);
   assert.doesNotMatch(source, /Array\.from\(event\.dataTransfer\.files\)/);
   assert.doesNotMatch(source, /Array\.from\(event\.target\.files\)/);
   assert.ok(manifest.length > 0 || source.includes("Paperclock"));

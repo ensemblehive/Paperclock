@@ -108,8 +108,9 @@ a { color: inherit; text-decoration: none; }
 }
 .engine--online .engine__dot { background: #5f8b61; box-shadow: 0 0 0 3px rgba(95, 139, 97, 0.16); }
 
-.source-link { font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--ink); padding-bottom: 2px; }
-.source-link span { color: var(--orange); }
+.ensemble-lockup { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font-family: var(--font-mono), monospace; font-size: 8px; letter-spacing: .055em; text-transform: uppercase; }
+.ensemble-lockup > i { width: 34px; height: 34px; border-radius: 5px; background: #000 url('/ensemble.png') center / cover no-repeat; box-shadow: 0 0 0 1px rgba(32, 34, 30, .12); }
+.ensemble-lockup strong { color: var(--ink); font-weight: 700; }
 
 .landing {
   max-width: 1120px;
@@ -228,6 +229,7 @@ a { color: inherit; text-decoration: none; }
 
 .preflight {
   max-width: 760px;
+  height: 62px;
   min-height: 62px;
   margin: 10px auto 0;
   padding: 10px 13px 12px;
@@ -247,6 +249,8 @@ a { color: inherit; text-decoration: none; }
 .preflight__pulse i:nth-child(3) { height: 11px; animation-delay: -.3s; }
 .preflight strong { display: block; margin-bottom: 3px; font-size: 10px; }
 .preflight small { display: block; color: var(--muted); font-family: var(--font-mono), monospace; font-size: 7px; }
+.preflight > div { min-width: 0; }
+.preflight strong, .preflight small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preflight > b { font-family: var(--font-mono), monospace; font-size: 10px; font-weight: 500; }
 .preflight__track { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: #dfdbd1; }
 .preflight__track i { display: block; height: 100%; min-width: 3px; background: var(--orange); transition: width 120ms linear; }
@@ -362,10 +366,12 @@ a { color: inherit; text-decoration: none; }
 .selection-tools { min-height: 28px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-family: var(--font-mono), monospace; font-size: 7px; text-transform: uppercase; letter-spacing: .06em; }
 .summary__actions .selection-tools button { width: auto; min-height: 0; border: 0; padding: 5px 0; background: transparent; color: var(--orange-dark); font-family: inherit; font-size: inherit; text-decoration: underline; }
 
-.timeline-panel { padding: 54px clamp(32px, 6vw, 90px) 28px; min-width: 0; }
+.timeline-panel { padding: 54px clamp(32px, 6vw, 90px) 28px; min-width: 0; overflow-anchor: none; }
 
 .scan-progress {
-  min-height: 124px;
+  height: 146px;
+  min-height: 146px;
+  max-height: 146px;
   margin: -25px 0 42px;
   padding: 19px 18px;
   border: 1px solid #c8c3b8;
@@ -377,6 +383,8 @@ a { color: inherit; text-decoration: none; }
   gap: 20px;
   position: relative;
   overflow: hidden;
+  contain: layout paint;
+  isolation: isolate;
 }
 .scan-progress::after {
   content: "";
@@ -386,6 +394,7 @@ a { color: inherit; text-decoration: none; }
   background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.55) 48%, transparent 61%);
   transform: translateX(-120%);
   animation: paper-sweep 2.8s ease-in-out infinite;
+  will-change: transform;
 }
 .scan-progress--cancelled::after { animation: none; }
 
@@ -397,6 +406,7 @@ a { color: inherit; text-decoration: none; }
   position: relative;
   background: var(--paper-light);
   box-shadow: inset 0 0 0 5px #ece9e0;
+  contain: layout paint;
 }
 .scan-progress__clock::before {
   content: "";
@@ -430,23 +440,24 @@ a { color: inherit; text-decoration: none; }
 }
 .scan-progress--cancelled .scan-progress__clock i { animation-play-state: paused; }
 
-.scan-progress__body { min-width: 0; }
-.scan-progress__top { display: flex; align-items: center; justify-content: space-between; }
+.scan-progress__body { min-width: 0; height: 104px; display: grid; grid-template-rows: 16px 25px 13px 7px 4px 30px; align-content: center; }
+.scan-progress__top { height: 16px; display: flex; align-items: center; justify-content: space-between; }
 .scan-progress__top span { color: var(--orange-dark); font-family: var(--font-mono), monospace; font-size: 8px; letter-spacing: .12em; text-transform: uppercase; }
-.scan-progress__top strong { font-family: var(--font-mono), monospace; font-size: 13px; font-weight: 500; }
-.scan-progress__body > p { margin: 7px 0 11px; overflow: hidden; color: #4f514b; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.scan-progress__detail { display: block; min-height: 12px; margin: -6px 0 8px; color: #85837b; font-family: var(--font-mono), monospace; font-size: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scan-progress__top strong { min-width: 4ch; text-align: right; font-family: var(--font-mono), monospace; font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.scan-progress__body > p { height: 25px; margin: 0; padding-top: 6px; overflow: hidden; color: #4f514b; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.scan-progress__detail { display: block; height: 13px; margin: 0; overflow: hidden; color: #85837b; font-family: var(--font-mono), monospace; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 
-.file-progress { height: 2px; margin-bottom: 5px; background: #e4d8cd; overflow: hidden; }
+.file-progress { height: 2px; margin: 1px 0 4px; background: #e4d8cd; overflow: hidden; }
 .file-progress i { display: block; height: 100%; min-width: 3px; background: var(--yellow); transition: width 100ms linear; }
+.file-progress--idle i { min-width: 0; }
 
 .progress-track { height: 3px; background: #d9d5cb; overflow: hidden; }
 .progress-track i { display: block; height: 100%; min-width: 3px; background: var(--orange); transition: width 300ms ease; }
 .scan-progress--finishing .progress-track i { background: var(--sage); }
 
-.scan-progress__facts { min-height: 17px; margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px 15px; color: #85837b; font-family: var(--font-mono), monospace; font-size: 7px; }
+.scan-progress__facts { height: 30px; margin-top: 6px; display: flex; align-items: flex-start; flex-wrap: wrap; gap: 5px 15px; overflow: hidden; color: #85837b; font-family: var(--font-mono), monospace; font-size: 7px; }
 .scan-progress__facts b { color: var(--ink); font-weight: 500; }
-.scan-control { min-width: 67px; border: 1px solid #a9a59b; background: transparent; padding: 8px 11px; font-size: 9px; cursor: pointer; position: relative; z-index: 1; }
+.scan-control { width: 72px; min-width: 72px; border: 1px solid #a9a59b; background: transparent; padding: 8px 11px; font-size: 9px; cursor: pointer; position: relative; z-index: 1; }
 .scan-control:hover { border-color: var(--orange); color: var(--orange-dark); }
 .scan-control--resume { border-color: var(--ink); background: var(--ink); color: var(--paper-light); }
 
@@ -602,7 +613,8 @@ a { color: inherit; text-decoration: none; }
 
 @media (max-width: 680px) {
   .topbar { height: 68px; padding: 0 20px; }
-  .source-link { display: none; }
+  .ensemble-lockup > span { display: none; }
+  .ensemble-lockup > i { width: 31px; height: 31px; }
   .engine { font-size: 8px; }
   .landing { padding: 50px 18px 24px; }
   .landing h1 { font-size: clamp(54px, 17vw, 76px); }
@@ -617,7 +629,7 @@ a { color: inherit; text-decoration: none; }
   .summary { display: block; padding: 34px 22px; }
   .summary__actions { margin-top: 34px; }
   .timeline-panel { padding: 38px 18px 20px; }
-  .scan-progress { margin: -16px 0 34px; grid-template-columns: 49px 1fr; gap: 13px; padding: 16px 13px; }
+  .scan-progress { height: 192px; min-height: 192px; max-height: 192px; margin: -16px 0 34px; grid-template-columns: 49px 1fr; gap: 13px; padding: 16px 13px; }
   .scan-progress__clock { width: 46px; height: 46px; }
   .scan-progress__clock::before { left: 19px; top: 19px; }
   .scan-progress__clock i { left: 21.5px; bottom: 23px; }
@@ -640,5 +652,5 @@ a { color: inherit; text-decoration: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }

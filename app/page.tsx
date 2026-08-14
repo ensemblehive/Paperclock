@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 const ENGINE = "http://127.0.0.1:4312";
 const TEXT_TYPES = new Set([
@@ -111,6 +112,7 @@ type ScanActivity = {
   current: string;
   detail?: string;
   filePercent?: number | null;
+  overallPercent?: number | null;
 };
 
 const categoryNames: Record<string, string> = {
@@ -160,6 +162,7 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const lastEntriesRef = useRef<ScanEntry[]>([]);
+  const pickerRequestRef = useRef(0);
   const [engineOnline, setEngineOnline] = useState<boolean | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -176,6 +179,18 @@ export default function Home() {
       .then((response) => setEngineOnline(response.ok))
       .catch(() => setEngineOnline(false));
   }, []);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const handleCancel = () => {
+      pickerRequestRef.current = 0;
+      setLoading(false);
+      setActivity(result ? { active: false, phase: "complete", current: "Your horizon is ready" } : null);
+    };
+    input.addEventListener("cancel", handleCancel);
+    return () => input.removeEventListener("cancel", handleCancel);
+  }, [result]);
 
   const visible = useMemo(() => {
     if (!result) return [];
@@ -205,6 +220,7 @@ export default function Home() {
       current: `Indexing ${entries.length.toLocaleString()} supported ${entries.length === 1 ? "file" : "files"}`,
       detail: "Checking what has changed before reading file contents",
       filePercent: null,
+      overallPercent: 30,
     });
     await waitForFirstPaint();
     const controller = new AbortController();
@@ -217,6 +233,7 @@ export default function Home() {
           current: "Fingerprinting file names and timestamps",
           detail: `${processed.toLocaleString()} of ${total.toLocaleString()} indexed without opening contents`,
           filePercent: total ? Math.round((processed / total) * 100) : 100,
+          overallPercent: total ? 30 + Math.round((processed / total) * 8) : 38,
         });
       });
       const startResponse = await fetch(`${ENGINE}/api/scans/start`, {
@@ -328,6 +345,7 @@ export default function Home() {
         current: "Opening the folder safely",
         detail: "Paperclock has received your selection",
         filePercent: 0,
+        overallPercent: 12,
       });
     }
     try {
@@ -339,6 +357,7 @@ export default function Home() {
           current: "Checking supported file types",
           detail: `${processed.toLocaleString()} of ${total.toLocaleString()} names checked`,
           filePercent: total ? Math.round((processed / total) * 100) : 100,
+          overallPercent: total ? 15 + Math.round((processed / total) * 15) : 30,
         });
       });
       if (!entries.length) {
@@ -359,6 +378,99 @@ export default function Home() {
     }
   }
 
+  async function chooseFolder() {
+    const input = inputRef.current;
+    if (!input || loading) return;
+    pickerRequestRef.current += 1;
+    // Commit the status surface before the native picker takes control. Large
+    // folders can take the browser seconds to materialize before `change` fires.
+    flushSync(() => {
+      setLoading(true);
+      setError("");
+      setActivity({
+        active: true,
+        phase: "preparing",
+        current: "Ready for your folder",
+        detail: "Choose it in the system window · processing starts automatically",
+        filePercent: null,
+        overallPercent: null,
+      });
+    });
+    const directoryPicker = (window as typeof window & {
+      showDirectoryPicker?: (options?: { mode: "read" }) => Promise<FileSystemHandleLike>;
+    }).showDirectoryPicker;
+    if (directoryPicker) {
+      try {
+        const handle = await directoryPicker.call(window, { mode: "read" });
+        pickerRequestRef.current = 0;
+        setActivity({
+          active: true,
+          phase: "preparing",
+          current: "Discovering files in the selected folder",
+          detail: "0 files found so far",
+          filePercent: null,
+          overallPercent: null,
+        });
+        await processDirectorySelection({ sources: [{ handlePromise: Promise.resolve(handle) }], fallbackFiles: [] });
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === "AbortError") {
+          setLoading(false);
+          setActivity(result ? { active: false, phase: "complete", current: "Your horizon is ready" } : null);
+          return;
+        }
+        setLoading(false);
+        setActivity(null);
+        setError("That folder could not be opened. Please try again or drag it onto Paperclock.");
+      }
+      return;
+    }
+    input.click();
+  }
+
+  function onDragEnter(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    if (dragging) return;
+    setDragging(true);
+    setLoading(true);
+    setError("");
+    setActivity({
+      active: true,
+      phase: "preparing",
+      current: "Release to start",
+      detail: "Paperclock is ready to inspect this folder locally",
+      filePercent: null,
+      overallPercent: null,
+    });
+  }
+
+  function onDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    setDragging(false);
+    setLoading(false);
+    setActivity(null);
+  }
+
+  async function processDirectorySelection(selection: DroppedSelection) {
+    try {
+      await waitForFirstPaint();
+      const discovery = await collectDroppedFiles(selection, ({ discovered, supported, currentPath }) => {
+        setActivity({
+          active: true,
+          phase: "preparing",
+          current: "Discovering files in the selected folder",
+          detail: `${discovered.toLocaleString()} found · ${supported.toLocaleString()} supported${currentPath ? ` · ${currentPath}` : ""}`,
+          filePercent: null,
+          overallPercent: null,
+        });
+      });
+      await handleFiles(discovery.files, true, discovery.discovered);
+    } catch {
+      setLoading(false);
+      setActivity(null);
+      setError("That folder could not be read. Please try again or choose a different folder.");
+    }
+  }
+
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
@@ -373,29 +485,13 @@ export default function Home() {
       current: "Discovering files in the dropped folder",
       detail: "0 files found so far",
       filePercent: null,
+      overallPercent: null,
     });
-    void (async () => {
-      try {
-        await waitForFirstPaint();
-        const discovery = await collectDroppedFiles(selection, ({ discovered, supported, currentPath }) => {
-          setActivity({
-            active: true,
-            phase: "preparing",
-            current: "Discovering files in the dropped folder",
-            detail: `${discovered.toLocaleString()} found · ${supported.toLocaleString()} supported${currentPath ? ` · ${currentPath}` : ""}`,
-            filePercent: null,
-          });
-        });
-        await handleFiles(discovery.files, true, discovery.discovered);
-      } catch {
-        setLoading(false);
-        setActivity(null);
-        setError("That folder could not be read. Use “choose a folder” to select it through the folder picker.");
-      }
-    })();
+    void processDirectorySelection(selection);
   }
 
   function onInput(event: ChangeEvent<HTMLInputElement>) {
+    pickerRequestRef.current = 0;
     const input = event.currentTarget;
     const fileList = input.files;
     if (!fileList) return;
@@ -407,6 +503,7 @@ export default function Home() {
       current: "Folder received",
       detail: "Starting local discovery now",
       filePercent: null,
+      overallPercent: 3,
     });
     void (async () => {
       try {
@@ -419,6 +516,7 @@ export default function Home() {
             current: "Receiving file names from the browser",
             detail: `${processed.toLocaleString()} of ${total.toLocaleString()} received`,
             filePercent: total ? Math.round((processed / total) * 100) : 100,
+            overallPercent: total ? 5 + Math.round((processed / total) * 10) : 15,
           });
         });
         input.value = "";
@@ -493,6 +591,8 @@ export default function Home() {
     setTimeout(() => URL.revokeObjectURL(url), 300_000);
   }
 
+  const preflightPercent = activity?.overallPercent;
+
   return (
     <main className={result ? "app app--results" : "app"}>
       <header className="topbar">
@@ -505,7 +605,10 @@ export default function Home() {
             <span className="engine__dot" />
             {engineOnline === null ? "Finding local engine" : engineOnline ? "Local engine ready" : "Engine offline"}
           </span>
-          <span className="source-link">MIT · open source</span>
+          <span className="ensemble-lockup">
+            <i aria-hidden="true" />
+            <span>Product of <strong>Ensemble Hive</strong></span>
+          </span>
         </div>
       </header>
 
@@ -519,9 +622,10 @@ export default function Home() {
           </p>
           <div
             className={`dropzone ${dragging ? "dropzone--active" : ""} ${loading ? "dropzone--loading" : ""}`}
-            onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
+            aria-busy={loading}
+            onDragEnter={onDragEnter}
             onDragOver={(event) => event.preventDefault()}
-            onDragLeave={() => setDragging(false)}
+            onDragLeave={onDragLeave}
             onDrop={onDrop}
           >
             <input
@@ -535,20 +639,20 @@ export default function Home() {
             <div className="dropzone__icon" aria-hidden="true"><span>↓</span></div>
             <div>
               <strong>{dragging ? "Release to scan this folder" : loading ? "Mapping the paper trail…" : "Drop a folder here"}</strong>
-              <span>{dragging ? "Paperclock is ready" : <>or <button onClick={() => inputRef.current?.click()}>choose a folder</button> · any number of files</>}</span>
+              <span>{dragging ? "Paperclock is ready" : <>or <button onClick={chooseFolder}>choose a folder</button> · any number of files</>}</span>
             </div>
             <div className="format-row"><span>PDF</span><span>DOCX</span><span>EMAIL</span><span>TEXT</span><span>CALENDAR</span></div>
           </div>
           {loading && !result && activity && (
-            <div className="preflight" aria-live="polite">
+            <div className="preflight" role="status" aria-live="polite">
               <span className="preflight__pulse" aria-hidden="true"><i /><i /><i /></span>
               <div>
                 <strong>{activity.current}</strong>
                 <small>{activity.detail}</small>
               </div>
-              <b>{activity.filePercent === null || activity.filePercent === undefined ? "…" : `${activity.filePercent}%`}</b>
-              <div className={`preflight__track ${activity.filePercent === null || activity.filePercent === undefined ? "preflight__track--indeterminate" : ""}`}>
-                <i style={activity.filePercent === null || activity.filePercent === undefined ? undefined : { width: `${activity.filePercent}%` }} />
+              <b>{preflightPercent === null || preflightPercent === undefined ? "…" : `${preflightPercent}%`}</b>
+              <div className={`preflight__track ${preflightPercent === null || preflightPercent === undefined ? "preflight__track--indeterminate" : ""}`}>
+                <i style={preflightPercent === null || preflightPercent === undefined ? undefined : { width: `${preflightPercent}%` }} />
               </div>
             </div>
           )}
@@ -585,7 +689,7 @@ export default function Home() {
           })}
           selectVisible={() => setSelected(new Set(visible.map((item) => item.id)))}
           clearSelected={() => setSelected(new Set())}
-          rescan={() => inputRef.current?.click()}
+          rescan={chooseFolder}
           downloadSelected={() => void downloadCalendar(result.commitments.filter((item) => selected.has(item.id)))}
           downloadOne={(item) => void downloadCalendar([item], `${calendarFilename(item.title)}.ics`)}
           openSource={openSource}
@@ -737,8 +841,9 @@ function ScanProgress({
 }) {
   const percent = result.total ? Math.min(100, Math.round((result.files_processed / result.total) * 100)) : 0;
   const phaseLabel = activity.phase === "preparing" ? "Preparing" : activity.phase === "indexing" ? "Indexing" : activity.phase === "finishing" ? "Finishing" : activity.phase === "cancelled" ? "Paused" : "Reading";
+  const hasFileProgress = activity.phase === "preparing" && activity.filePercent !== null && activity.filePercent !== undefined;
   return (
-    <section className={`scan-progress scan-progress--${activity.phase}`} aria-live="polite">
+    <section className={`scan-progress scan-progress--${activity.phase}`} role="status" aria-live="polite" aria-busy={activity.active}>
       <div className="scan-progress__clock" aria-hidden="true"><i /><i /><b /></div>
       <div className="scan-progress__body">
         <div className="scan-progress__top">
@@ -746,10 +851,10 @@ function ScanProgress({
           <strong>{percent}%</strong>
         </div>
         <p>{activity.current}</p>
-        {activity.detail && <small className="scan-progress__detail">{activity.detail}</small>}
-        {activity.phase === "preparing" && activity.filePercent !== null && activity.filePercent !== undefined && (
-          <div className="file-progress"><i style={{ width: `${activity.filePercent}%` }} /></div>
-        )}
+        <small className="scan-progress__detail">{activity.detail || "Local processing continues inside Paperclock"}</small>
+        <div className={`file-progress ${hasFileProgress ? "" : "file-progress--idle"}`} aria-hidden={!hasFileProgress}>
+          <i style={{ width: `${hasFileProgress ? activity.filePercent : 0}%` }} />
+        </div>
         <div className="progress-track"><i style={{ width: `${percent}%` }} /></div>
         <div className="scan-progress__facts">
           <span><b>{result.files_processed.toLocaleString()}</b> of {result.total.toLocaleString()} files</span>

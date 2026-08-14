@@ -10,6 +10,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
   title: "Paperclock — Your files know what’s coming",
   description: "A private, local deadline radar for the commitments hiding in your files.",
+  icons: { icon: "/ensemble.png" },
   openGraph: {
     title: "Paperclock",
     description: "Your files know what’s coming.",

@@ -9,6 +9,8 @@ Drop in a folder and it finds renewals, cancellation windows, expiries, payments
 submissions, appointments, and warranties—then turns them into one explainable
 timeline and an `.ics` calendar.
 
+Paperclock is a product of Ensemble Hive.
+
 No account. No document upload. No model download. The Python engine runs on your
 machine and every result shows the source location and why it was kept.
 
@@ -62,6 +64,8 @@ yielding chunks. Large file encoding runs inside a dedicated browser worker with
 byte-level progress, keeping the interface and its animations responsive.
 Dropped folders are traversed recursively through the browser's directory-entry
 API; the folder picker is available as a compatibility fallback.
+On supporting browsers, Paperclock uses a directory handle instead of waiting for
+the browser to flatten the whole folder before returning control to the page.
 The first status frame is painted before enumeration begins, supported files are
 filtered before metadata reads, and directory metadata is fetched with bounded
 concurrency so very large selections never monopolize the interface.
