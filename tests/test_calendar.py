@@ -13,6 +13,7 @@ class CalendarTests(unittest.TestCase):
                 "date": "2026-09-10",
                 "title": "Cancel plan, keep receipt",
                 "source": "Bills/energy.txt",
+                "page": 4,
                 "reason": "renewal found nearby",
                 "category": "cancellation",
             }]
@@ -20,6 +21,7 @@ class CalendarTests(unittest.TestCase):
         self.assertIn("BEGIN:VCALENDAR\r\n", output)
         self.assertIn("DTSTART;VALUE=DATE:20260910", output)
         self.assertIn("SUMMARY:Cancel plan\\, keep receipt", output)
+        self.assertIn("Found in Bills/energy.txt\\, page 4", output)
         self.assertTrue(output.endswith("END:VCALENDAR\r\n"))
 
 

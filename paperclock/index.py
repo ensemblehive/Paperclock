@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-ENGINE_VERSION = "0.2"
+ENGINE_VERSION = "0.3"
 
 
 class ScanIndex:

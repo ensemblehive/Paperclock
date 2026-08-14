@@ -354,10 +354,13 @@ a { color: inherit; text-decoration: none; }
 .summary__actions button { width: 100%; min-height: 45px; cursor: pointer; font-size: 11px; font-weight: 750; }
 .summary__actions .primary { border: 1px solid var(--ink); background: var(--ink); color: var(--paper-light); }
 .summary__actions .primary:hover { background: var(--orange-dark); border-color: var(--orange-dark); }
+.summary__actions .primary:disabled { cursor: not-allowed; opacity: .42; }
 .summary__actions .primary span { float: right; color: var(--yellow); }
 .summary__actions .secondary { margin-top: 8px; border: 1px solid #bcb8ad; background: transparent; }
 .summary__actions .secondary:hover { background: var(--paper-light); }
 .summary__actions p { margin: 12px 0 0; color: #8a8880; font-size: 8px; line-height: 1.5; text-align: center; }
+.selection-tools { min-height: 28px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-family: var(--font-mono), monospace; font-size: 7px; text-transform: uppercase; letter-spacing: .06em; }
+.summary__actions .selection-tools button { width: auto; min-height: 0; border: 0; padding: 5px 0; background: transparent; color: var(--orange-dark); font-family: inherit; font-size: inherit; text-decoration: underline; }
 
 .timeline-panel { padding: 54px clamp(32px, 6vw, 90px) 28px; min-width: 0; }
 
@@ -493,18 +496,38 @@ a { color: inherit; text-decoration: none; }
 .group-label { display: flex; align-items: center; gap: 13px; margin-bottom: 13px; color: #787972; font-family: var(--font-mono), monospace; font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; }
 .group-label i { height: 1px; background: var(--rule); flex: 1; }
 
-.commitment {
+.document-card {
   position: relative;
-  min-height: 125px;
-  padding: 21px 48px 19px 19px;
-  border-bottom: 1px solid var(--rule);
+  margin-bottom: 13px;
+  border: 1px solid var(--rule);
+  background: rgba(250, 248, 242, .48);
+  transition: background 130ms ease, transform 130ms ease, box-shadow 130ms ease;
+}
+.document-card:hover { background: rgba(250, 248, 242, .82); box-shadow: 4px 4px 0 #e2ded4; transform: translateX(2px); }
+.document-card__head {
+  min-height: 110px;
+  padding: 18px;
   display: grid;
   grid-template-columns: 67px 1fr;
-  gap: 21px;
-  transition: background 130ms ease, transform 130ms ease;
+  gap: 18px;
+  align-items: start;
 }
-.commitment:first-of-type { border-top: 1px solid var(--rule); }
-.commitment:hover { background: rgba(250, 248, 242, 0.62); transform: translateX(3px); }
+.document-card__toggle { min-width: 0; border: 0; padding: 4px 34px 4px 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; position: relative; }
+.document-card__toggle strong { display: block; margin-top: 6px; font-family: var(--font-serif), Georgia, serif; font-size: 25px; font-weight: 400; line-height: 1.05; letter-spacing: -.025em; }
+.document-card__toggle small { display: block; margin-top: 8px; overflow: hidden; color: #85837b; font-family: var(--font-mono), monospace; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.document-card__toggle i { position: absolute; right: 1px; top: 12px; color: var(--orange); font-family: var(--font-serif), Georgia, serif; font-size: 22px; font-style: normal; }
+.document-card__eyebrow { color: var(--orange-dark); font-family: var(--font-mono), monospace; font-size: 7px; text-transform: uppercase; letter-spacing: .1em; }
+.milestone-list { border-top: 1px solid var(--rule); }
+.milestone { min-height: 126px; padding: 19px 42px 18px 18px; display: grid; grid-template-columns: 22px 86px 1fr; gap: 13px; position: relative; }
+.milestone + .milestone { border-top: 1px solid #dedad0; }
+.milestone time { padding-top: 3px; color: #5e6059; font-family: var(--font-mono), monospace; font-size: 8px; line-height: 1.4; }
+.milestone__body { min-width: 0; }
+.milestone__check { width: 17px; height: 17px; margin-top: 1px; position: relative; cursor: pointer; }
+.milestone__check input { position: absolute; opacity: 0; }
+.milestone__check span { position: absolute; inset: 0; border: 1px solid #aaa69c; background: var(--paper-light); }
+.milestone__check input:checked + span { border-color: var(--orange); background: var(--orange); }
+.milestone__check input:checked + span::after { content: "✓"; position: absolute; left: 3px; top: -1px; color: white; font-size: 11px; }
+.milestone__check input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 .date-tile {
   align-self: start;
@@ -518,9 +541,9 @@ a { color: inherit; text-decoration: none; }
   position: relative;
 }
 .date-tile::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--orange); }
-.commitment--renewal .date-tile::before, .commitment--warranty .date-tile::before { background: #82977f; }
-.commitment--money .date-tile::before { background: var(--yellow); }
-.commitment--submission .date-tile::before, .commitment--appointment .date-tile::before { background: var(--blue); }
+.document-card--renewal .date-tile::before, .document-card--warranty .date-tile::before { background: #82977f; }
+.document-card--money .date-tile::before { background: var(--yellow); }
+.document-card--submission .date-tile::before, .document-card--appointment .date-tile::before { background: var(--blue); }
 .date-tile span { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: 0.1em; }
 .date-tile strong { font-family: var(--font-serif), Georgia, serif; font-size: 30px; font-weight: 400; line-height: 1; }
 .date-tile small { margin-top: 2px; color: #908e86; font-family: var(--font-mono), monospace; font-size: 7px; }
@@ -532,18 +555,22 @@ a { color: inherit; text-decoration: none; }
 .relative--late { color: var(--orange-dark); }
 .ambiguous { color: #855d00; background: #eee1aa; padding: 3px 6px; }
 
-.commitment h3 { margin: 0; font-size: 15px; line-height: 1.4; letter-spacing: -0.018em; font-weight: 750; }
+.milestone h3 { margin: 0; font-size: 15px; line-height: 1.4; letter-spacing: -0.018em; font-weight: 750; }
 .source { margin: 7px 0 0; color: #85837b; font-family: var(--font-mono), monospace; font-size: 8px; overflow-wrap: anywhere; }
 .source span { color: var(--orange); }
 .source b { margin: 0 4px; font-weight: 400; }
 
-.commitment details { margin-top: 11px; color: var(--muted); font-size: 9px; }
-.commitment summary { width: fit-content; cursor: pointer; list-style: none; }
-.commitment summary::-webkit-details-marker { display: none; }
-.commitment summary span { color: var(--orange); margin-left: 4px; }
-.commitment details[open] summary span { display: inline-block; transform: rotate(45deg); }
-.commitment blockquote { margin: 10px 0 5px; padding-left: 10px; border-left: 2px solid var(--rule); line-height: 1.55; }
-.commitment details p { margin: 0; }
+.milestone__actions { margin-top: 11px; display: flex; flex-wrap: wrap; gap: 7px; }
+.milestone__actions button { border: 1px solid #c4c0b6; padding: 6px 9px; background: transparent; color: #585a54; font-size: 8px; cursor: pointer; }
+.milestone__actions button:hover { border-color: var(--orange); color: var(--orange-dark); }
+.milestone__actions button span { margin-left: 5px; color: var(--orange); }
+.milestone details { margin-top: 11px; color: var(--muted); font-size: 9px; }
+.milestone summary { width: fit-content; cursor: pointer; list-style: none; }
+.milestone summary::-webkit-details-marker { display: none; }
+.milestone summary span { color: var(--orange); margin-left: 4px; }
+.milestone details[open] summary span { display: inline-block; transform: rotate(45deg); }
+.milestone blockquote { margin: 10px 0 5px; padding-left: 10px; border-left: 2px solid var(--rule); line-height: 1.55; }
+.milestone details p { margin: 0; }
 
 .dismiss {
   position: absolute;
@@ -556,7 +583,7 @@ a { color: inherit; text-decoration: none; }
   cursor: pointer;
   opacity: 0;
 }
-.commitment:hover .dismiss, .dismiss:focus { opacity: 1; }
+.milestone:hover .dismiss, .dismiss:focus { opacity: 1; }
 
 .empty-state { padding: 100px 20px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); text-align: center; }
 .empty-state > span { color: var(--orange); font-size: 30px; }
@@ -601,9 +628,12 @@ a { color: inherit; text-decoration: none; }
   .timeline-head { display: block; margin-bottom: 30px; }
   .filters { margin-top: 25px; overflow-x: auto; }
   .filters button { flex: 1; }
-  .commitment { grid-template-columns: 53px 1fr; gap: 14px; padding: 18px 34px 17px 8px; }
+  .document-card__head { grid-template-columns: 53px 1fr; gap: 14px; padding: 14px 12px; }
   .date-tile strong { font-size: 25px; }
-  .commitment h3 { font-size: 13px; }
+  .milestone { grid-template-columns: 22px 1fr; gap: 10px; padding: 16px 32px 16px 12px; }
+  .milestone time { grid-column: 2; margin-top: -5px; }
+  .milestone__body { grid-column: 2; }
+  .milestone h3 { font-size: 13px; }
   .dismiss { opacity: 1; right: 5px; }
   .results-footer { display: block; line-height: 1.7; }
   .results-footer span { display: block; }

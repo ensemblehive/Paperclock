@@ -82,7 +82,11 @@ def _read_pdf(path: str, raw: bytes) -> str:
         raise UnreadableFile(f"{path}: PDF support requires pypdf") from exc
     try:
         reader = PdfReader(io.BytesIO(raw))
-        return _clean("\n".join(page.extract_text() or "" for page in reader.pages))
+        pages = [
+            f"[[PAPERCLOCK_PAGE:{page_number}]]\n{page.extract_text() or ''}"
+            for page_number, page in enumerate(reader.pages, start=1)
+        ]
+        return _clean("\n".join(pages))
     except Exception as exc:
         raise UnreadableFile(f"{path}: could not read PDF") from exc
 

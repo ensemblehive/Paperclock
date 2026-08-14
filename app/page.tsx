@@ -10,6 +10,7 @@ const TEXT_TYPES = new Set([
 const BINARY_TYPES = new Set(["pdf", "docx"]);
 const DISCOVERY_CONCURRENCY = 8;
 const ENUMERATION_CHUNK = 250;
+const EXTRACTION_REVISION = "3";
 
 type Commitment = {
   id: string;
@@ -23,6 +24,7 @@ type Commitment = {
   reason: string;
   original: string;
   ambiguous: boolean;
+  page?: number | null;
 };
 
 type ScanResult = {
@@ -167,6 +169,7 @@ export default function Home() {
   const [filter, setFilter] = useState("all");
   const [dateOrder, setDateOrder] = useState("day-first");
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetch(`${ENGINE}/api/health`)
@@ -182,7 +185,6 @@ export default function Home() {
       const days = dayDifference(today, new Date(`${item.date}T12:00:00`));
       if (filter === "soon") return days >= 0 && days <= 30;
       if (filter === "expiry") return ["expiry", "renewal", "warranty"].includes(item.category);
-      if (filter === "money") return item.category === "money";
       return true;
     });
   }, [dismissed, filter, result]);
@@ -196,6 +198,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     setDismissed(new Set());
+    setSelected(new Set());
     setActivity({
       active: true,
       phase: "indexing",
@@ -445,9 +448,12 @@ export default function Home() {
     }
   }
 
-  async function downloadCalendar() {
-    if (!result) return;
-    const commitments = result.commitments.filter((item) => !dismissed.has(item.id));
+  async function downloadCalendar(commitments: Commitment[], filename = "paperclock-selection.ics") {
+    if (!commitments.length) {
+      setError("Select at least one milestone to add to your calendar.");
+      return;
+    }
+    setError("");
     try {
       const response = await fetch(`${ENGINE}/api/calendar`, {
         method: "POST",
@@ -458,12 +464,33 @@ export default function Home() {
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = "paperclock.ics";
+      anchor.download = filename;
+      document.body.append(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
     } catch {
       setError("The calendar could not be created. Is the local engine still running?");
     }
+  }
+
+  function openSource(item: Commitment) {
+    setError("");
+    const entry = lastEntriesRef.current.find((candidate) => candidate.path === item.source);
+    if (!entry?.file) {
+      setError("That source is not available in this browser session. Scan the folder again to reopen it.");
+      return;
+    }
+    const url = URL.createObjectURL(entry.file);
+    const target = item.page && item.source.toLowerCase().endsWith(".pdf") ? `${url}#page=${item.page}` : url;
+    const anchor = document.createElement("a");
+    anchor.href = target;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 300_000);
   }
 
   return (
@@ -546,9 +573,22 @@ export default function Home() {
           visible={visible}
           filter={filter}
           setFilter={setFilter}
-          dismiss={(id) => setDismissed((current) => new Set(current).add(id))}
+          dismiss={(id) => {
+            setDismissed((current) => new Set(current).add(id));
+            setSelected((current) => { const next = new Set(current); next.delete(id); return next; });
+          }}
+          selected={selected}
+          toggleSelected={(id) => setSelected((current) => {
+            const next = new Set(current);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+          })}
+          selectVisible={() => setSelected(new Set(visible.map((item) => item.id)))}
+          clearSelected={() => setSelected(new Set())}
           rescan={() => inputRef.current?.click()}
-          downloadCalendar={() => void downloadCalendar()}
+          downloadSelected={() => void downloadCalendar(result.commitments.filter((item) => selected.has(item.id)))}
+          downloadOne={(item) => void downloadCalendar([item], `${calendarFilename(item.title)}.ics`)}
+          openSource={openSource}
           loading={loading}
           error={error}
           activity={activity}
@@ -572,7 +612,8 @@ export default function Home() {
 }
 
 function Results({
-  result, visible, filter, setFilter, dismiss, rescan, downloadCalendar, loading, error,
+  result, visible, filter, setFilter, dismiss, selected, toggleSelected, selectVisible,
+  clearSelected, rescan, downloadSelected, downloadOne, openSource, loading, error,
   activity, cancelScan, resumeScan,
 }: {
   result: ScanResult;
@@ -580,8 +621,14 @@ function Results({
   filter: string;
   setFilter: (value: string) => void;
   dismiss: (id: string) => void;
+  selected: Set<string>;
+  toggleSelected: (id: string) => void;
+  selectVisible: () => void;
+  clearSelected: () => void;
   rescan: () => void;
-  downloadCalendar: () => void;
+  downloadSelected: () => void;
+  downloadOne: (item: Commitment) => void;
+  openSource: (item: Commitment) => void;
   loading: boolean;
   error: string;
   activity: ScanActivity | null;
@@ -590,16 +637,17 @@ function Results({
 }) {
   const today = new Date(`${result.today}T12:00:00`);
   const nearest = result.commitments.find((item) => new Date(`${item.date}T12:00:00`) >= today);
-  const groups = groupCommitments(visible, today);
+  const groups = groupDocuments(visible, today);
+  const documentCount = new Set(result.commitments.map((item) => item.source)).size;
 
   return (
     <section className="results-shell">
       <aside className="summary">
         <div>
           <p className="section-kicker">Folder pulse</p>
-          <h2>{result.commitments.length}<span> commitments<br />worth seeing</span></h2>
+          <h2>{documentCount}<span> documents<br />need attention</span></h2>
           <div className="summary__stats">
-            <div><strong>{result.files_scanned}</strong><span>files read</span></div>
+            <div><strong>{result.commitments.length}</strong><span>milestones found</span></div>
             <div><strong>{result.noise_removed}</strong><span>dates ignored</span></div>
           </div>
           <div className="nearest">
@@ -609,9 +657,16 @@ function Results({
           </div>
         </div>
         <div className="summary__actions">
-          <button className="primary" onClick={downloadCalendar}>Add all to calendar <span>↓</span></button>
+          <div className="selection-tools">
+            <button onClick={selectVisible}>Select visible</button>
+            <span>{selected.size} selected</span>
+            {selected.size > 0 && <button onClick={clearSelected}>Clear</button>}
+          </div>
+          <button className="primary" disabled={selected.size === 0} onClick={downloadSelected}>
+            Add {selected.size || "selected"} to calendar <span>↓</span>
+          </button>
           <button className="secondary" disabled={loading} onClick={rescan}>{loading ? "Scanning…" : "Scan another folder"}</button>
-          <p>Calendar export contains titles and source paths, never your file contents.</p>
+          <p>Choose only the milestones you want. File contents never enter calendar exports.</p>
         </div>
       </aside>
 
@@ -647,8 +702,17 @@ function Results({
             {groups.map((group) => (
               <div className="time-group" key={group.label}>
                 <div className="group-label"><span>{group.label}</span><i /></div>
-                {group.items.map((item) => (
-                  <CommitmentCard key={item.id} item={item} today={today} dismiss={() => dismiss(item.id)} />
+                {group.documents.map((document) => (
+                  <DocumentCard
+                    key={document.source}
+                    document={document}
+                    today={today}
+                    selected={selected}
+                    toggleSelected={toggleSelected}
+                    dismiss={dismiss}
+                    downloadOne={downloadOne}
+                    openSource={openSource}
+                  />
                 ))}
               </div>
             ))}
@@ -704,31 +768,83 @@ function ScanProgress({
   );
 }
 
-function CommitmentCard({ item, today, dismiss }: { item: Commitment; today: Date; dismiss: () => void }) {
-  const itemDate = new Date(`${item.date}T12:00:00`);
-  const days = dayDifference(today, itemDate);
-  const dateParts = new Intl.DateTimeFormat("en", { month: "short", day: "2-digit", year: "numeric" }).formatToParts(itemDate);
+type DocumentBundle = {
+  source: string;
+  items: Commitment[];
+  lead: Commitment;
+};
+
+function DocumentCard({
+  document, today, selected, toggleSelected, dismiss, downloadOne, openSource,
+}: {
+  document: DocumentBundle;
+  today: Date;
+  selected: Set<string>;
+  toggleSelected: (id: string) => void;
+  dismiss: (id: string) => void;
+  downloadOne: (item: Commitment) => void;
+  openSource: (item: Commitment) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const leadDate = new Date(`${document.lead.date}T12:00:00`);
+  const dateParts = new Intl.DateTimeFormat("en", { month: "short", day: "2-digit", year: "numeric" }).formatToParts(leadDate);
   const month = dateParts.find((part) => part.type === "month")?.value;
   const day = dateParts.find((part) => part.type === "day")?.value;
 
   return (
-    <article className={`commitment commitment--${item.category}`}>
-      <div className="date-tile"><span>{month}</span><strong>{day}</strong><small>{itemDate.getFullYear()}</small></div>
-      <div className="commitment__body">
-        <div className="commitment__meta">
-          <span className="category">{categoryNames[item.category] ?? "Action"}</span>
-          <span className={days < 0 ? "relative relative--late" : "relative"}>{relativeLabel(item.date, today)}</span>
-          {item.ambiguous && <span className="ambiguous">Check date order</span>}
-        </div>
-        <h3>{item.title}</h3>
-        <p className="source"><span aria-hidden="true">⌁</span> {item.source} <b>·</b> line {item.line}</p>
-        <details>
-          <summary>Why Paperclock kept this <span>+</span></summary>
-          <blockquote>“{item.snippet}”</blockquote>
-          <p>{item.reason}. Confidence {item.confidence}%.</p>
-        </details>
+    <article className={`document-card document-card--${document.lead.category}`}>
+      <div className="document-card__head">
+        <div className="date-tile"><span>{month}</span><strong>{day}</strong><small>{leadDate.getFullYear()}</small></div>
+        <button className="document-card__toggle" onClick={() => setExpanded((current) => !current)} aria-expanded={expanded}>
+          <span className="document-card__eyebrow">Document · {document.items.length} {document.items.length === 1 ? "milestone" : "milestones"}</span>
+          <strong>{documentLabel(document.source)}</strong>
+          <small>{document.source}</small>
+          <i aria-hidden="true">{expanded ? "−" : "+"}</i>
+        </button>
       </div>
-      <button className="dismiss" onClick={dismiss} title="Hide this commitment" aria-label={`Hide ${item.title}`}>×</button>
+      {expanded && (
+        <div className="milestone-list">
+          {document.items.map((item) => {
+            const itemDate = new Date(`${item.date}T12:00:00`);
+            const days = dayDifference(today, itemDate);
+            return (
+              <section className={`milestone milestone--${item.category}`} key={item.id}>
+                <label className="milestone__check">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(item.id)}
+                    onChange={() => toggleSelected(item.id)}
+                    aria-label={`Select ${item.title} for calendar export`}
+                  />
+                  <span aria-hidden="true" />
+                </label>
+                <time dateTime={item.date}>{shortDate(item.date)}</time>
+                <div className="milestone__body">
+                  <div className="commitment__meta">
+                    <span className="category">{categoryNames[item.category] ?? "Action"}</span>
+                    <span className={days < 0 ? "relative relative--late" : "relative"}>{relativeLabel(item.date, today)}</span>
+                    {item.ambiguous && <span className="ambiguous">Check date order</span>}
+                  </div>
+                  <h3>{item.title}</h3>
+                  <p className="source">
+                    <span aria-hidden="true">⌁</span> {item.page ? `page ${item.page}` : `line ${item.line}`}
+                  </p>
+                  <div className="milestone__actions">
+                    <button onClick={() => downloadOne(item)} aria-label={`Download ${item.title} calendar event`}>Add date <span>↓</span></button>
+                    <button onClick={() => openSource(item)}>{item.page ? `Open page ${item.page}` : "Open source"} <span>↗</span></button>
+                  </div>
+                  <details>
+                    <summary>Why Paperclock read this <span>+</span></summary>
+                    <blockquote>“{item.snippet}”</blockquote>
+                    <p>{item.reason}. Confidence {item.confidence}%.</p>
+                  </details>
+                </div>
+                <button className="dismiss" onClick={() => dismiss(item.id)} title="Hide this milestone" aria-label={`Hide ${item.title}`}>×</button>
+              </section>
+            );
+          })}
+        </div>
+      )}
     </article>
   );
 }
@@ -745,7 +861,7 @@ async function prepareEntries(files: IncomingFile[], onProgress: (processed: num
         path,
         size: file.size,
         modified,
-        fingerprint: `${path}\u0000${file.size}\u0000${file.lastModified}`,
+        fingerprint: `${EXTRACTION_REVISION}\u0000${path}\u0000${file.size}\u0000${file.lastModified}`,
         file,
       });
     }
@@ -916,7 +1032,7 @@ function prepareDemoEntries(files: UploadFile[]): ScanEntry[] {
     path: file.path,
     size: file.size ?? file.content.length,
     modified: file.modified,
-    fingerprint: `${file.path}\u0000${file.content.length}\u0000${file.modified}`,
+    fingerprint: `${EXTRACTION_REVISION}\u0000${file.path}\u0000${file.content.length}\u0000${file.modified}`,
     prepared: file,
   }));
 }
@@ -1029,17 +1145,42 @@ function relativeLabel(value: string, today: Date) {
   return `In ${days} days`;
 }
 
-function groupCommitments(items: Commitment[], today: Date) {
-  const buckets = [
-    { label: "Overdue", items: [] as Commitment[] },
-    { label: "Next 30 days", items: [] as Commitment[] },
-    { label: "Later", items: [] as Commitment[] },
-  ];
+function groupDocuments(items: Commitment[], today: Date) {
+  const documents = new Map<string, Commitment[]>();
   for (const item of items) {
-    const days = dayDifference(today, new Date(`${item.date}T12:00:00`));
-    (days < 0 ? buckets[0] : days <= 30 ? buckets[1] : buckets[2]).items.push(item);
+    const milestones = documents.get(item.source) ?? [];
+    milestones.push(item);
+    documents.set(item.source, milestones);
   }
-  return buckets.filter((bucket) => bucket.items.length);
+
+  const buckets = [
+    { label: "Overdue", documents: [] as DocumentBundle[] },
+    { label: "Next 30 days", documents: [] as DocumentBundle[] },
+    { label: "Later", documents: [] as DocumentBundle[] },
+  ];
+  for (const [source, milestones] of documents) {
+    milestones.sort((first, second) => first.date.localeCompare(second.date));
+    const lead = milestones.find((item) => new Date(`${item.date}T12:00:00`) >= today) ?? milestones[0];
+    const days = dayDifference(today, new Date(`${lead.date}T12:00:00`));
+    (days < 0 ? buckets[0] : days <= 30 ? buckets[1] : buckets[2]).documents.push({ source, items: milestones, lead });
+  }
+  for (const bucket of buckets) bucket.documents.sort((first, second) => first.lead.date.localeCompare(second.lead.date));
+  return buckets.filter((bucket) => bucket.documents.length);
+}
+
+function documentLabel(path: string): string {
+  const filename = path.split("/").pop() ?? path;
+  const stem = filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  return stem.replace(/\b\w/g, (letter) => letter.toUpperCase()) || "Untitled document";
+}
+
+function shortDate(value: string): string {
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${value}T12:00:00`));
+}
+
+function calendarFilename(title: string): string {
+  const safe = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return safe || "paperclock-event";
 }
 
 function formatEta(seconds: number) {

@@ -19,8 +19,10 @@ def make_calendar(commitments: list[dict[str, object]], name: str = "Paperclock"
             continue
         title = str(item.get("title", "Commitment"))
         source = str(item.get("source", ""))
+        page = item.get("page")
         event_id = str(item.get("id", raw_date))
-        description = f"Found in {source}. {item.get('reason', '')}".strip()
+        location = f"{source}, page {page}" if isinstance(page, int) and page > 0 else source
+        description = f"Found in {location}. {item.get('reason', '')}".strip()
         lines.extend(
             [
                 "BEGIN:VEVENT",

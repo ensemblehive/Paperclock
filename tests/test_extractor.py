@@ -39,6 +39,24 @@ class ExtractorTests(unittest.TestCase):
         commitment = extract_commitments(source, self.today).commitments[0]
         self.assertEqual(commitment.date, "2026-08-21")
 
+    def test_titles_are_short_and_domain_specific(self) -> None:
+        source = SourceFile(
+            "telecom/account-notice.txt",
+            "Your mobile number will be valid till 31.12.2026, kindly make payment before expiry.",
+        )
+        commitment = extract_commitments(source, self.today).commitments[0]
+        self.assertEqual(commitment.title, "SIM Plan Expiry")
+        self.assertIn("mobile number will be valid", commitment.snippet)
+
+    def test_pdf_page_markers_are_preserved_on_commitments(self) -> None:
+        source = SourceFile(
+            "policies/health-insurance.pdf",
+            "[[PAPERCLOCK_PAGE:3]]\nYour health insurance renews on September 14, 2026.",
+        )
+        commitment = extract_commitments(source, self.today).commitments[0]
+        self.assertEqual(commitment.title, "Health Insurance Renewal")
+        self.assertEqual(commitment.page, 3)
+
     def test_scan_reports_noise_and_skipped_files(self) -> None:
         result = scan_files(
             [

@@ -15,7 +15,7 @@ MONTHS.update({name.lower(): number for number, name in enumerate(calendar.month
 MONTH_TOKEN = "|".join(sorted(MONTHS, key=len, reverse=True))
 
 ACTION_GROUPS: dict[str, tuple[str, ...]] = {
-    "expiry": ("expire", "expires", "expiry", "expiration", "valid until", "good through", "lapses"),
+    "expiry": ("expire", "expires", "expiry", "expiration", "valid until", "valid till", "good through", "lapses"),
     "renewal": ("renew", "renews", "renewal", "auto-renew", "subscription", "membership"),
     "cancellation": ("cancel", "cancellation", "opt out", "notice period", "terminate", "termination"),
     "money": ("pay", "payment", "premium", "balance", "fee", "deposit", "refund"),
@@ -32,6 +32,38 @@ HISTORICAL_WORDS = (
     "transaction date", "invoice date", "statement date", "effective from", "copyright", "version",
     "changelog", "minutes from", "attended", "completed on", "paid on", "sent on", "received on",
 )
+PAGE_MARKER = re.compile(r"^\[\[PAPERCLOCK_PAGE:(\d+)\]\]$")
+ENTITY_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("health insurance", "medical insurance", "health policy"), "Health Insurance"),
+    (("motor insurance", "vehicle insurance", "car insurance", "auto insurance"), "Vehicle Insurance"),
+    (("life insurance", "life policy"), "Life Insurance"),
+    (("travel insurance",), "Travel Insurance"),
+    (("home insurance", "property insurance"), "Home Insurance"),
+    (("mobile number", "sim card", "prepaid", "postpaid"), "SIM Plan"),
+    (("energy plan", "electricity plan", "gas plan"), "Energy Plan"),
+    (("insurance", "policy"), "Insurance Policy"),
+    (("subscription",), "Subscription"),
+    (("membership",), "Membership"),
+    (("warranty", "guarantee"), "Warranty"),
+    (("certificate",), "Certificate"),
+    (("contract", "agreement"), "Agreement"),
+    (("invoice",), "Invoice"),
+    (("appointment",), "Appointment"),
+    (("application",), "Application"),
+    (("delivery", "shipment"), "Delivery"),
+    (("plan",), "Plan"),
+)
+CATEGORY_TITLES = {
+    "expiry": "Expiry",
+    "renewal": "Renewal",
+    "cancellation": "Cancellation Deadline",
+    "money": "Payment Due",
+    "submission": "Submission Deadline",
+    "appointment": "Appointment",
+    "delivery": "Delivery Due",
+    "warranty": "Coverage Ends",
+    "action": "Action Due",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,14 +85,19 @@ def extract_commitments(source: SourceFile, today: date, month_first: bool = Fal
     results: list[Commitment] = []
     candidates = 0
     anchor = _parse_anchor(source.modified) or today
+    page_number: int | None = None
     for line_number, raw_line in enumerate(source.content.splitlines(), start=1):
         line = re.sub(r"\s+", " ", raw_line).strip()
+        marker = PAGE_MARKER.fullmatch(line)
+        if marker:
+            page_number = int(marker[1])
+            continue
         if not line or len(line) > 2_000:
             continue
         hits = _find_dates(line, today=today, anchor=anchor, month_first=month_first)
         candidates += len(hits)
         for hit in hits:
-            commitment = _classify(source.path, line_number, line, hit, today)
+            commitment = _classify(source.path, line_number, line, hit, today, page_number)
             if commitment:
                 results.append(commitment)
     return Extraction(results, candidates)
@@ -120,7 +157,14 @@ def _find_dates(text: str, today: date, anchor: date, month_first: bool) -> list
     return hits
 
 
-def _classify(path: str, line_number: int, line: str, hit: DateHit, today: date) -> Commitment | None:
+def _classify(
+    path: str,
+    line_number: int,
+    line: str,
+    hit: DateHit,
+    today: date,
+    page_number: int | None,
+) -> Commitment | None:
     lowered = line.lower()
     nearest_action, distance = _nearest_keyword(lowered, hit.start, ACTION_WORDS)
     nearest_history, history_distance = _nearest_keyword(lowered, hit.start, HISTORICAL_WORDS)
@@ -137,7 +181,7 @@ def _classify(path: str, line_number: int, line: str, hit: DateHit, today: date)
 
     category = _category(lowered)
     confidence = max(42, min(98, round(score * 100)))
-    title = _title(line)
+    title = _title(line, path, category)
     reason = (
         f"“{nearest_action}” appears near this date"
         if nearest_action
@@ -158,6 +202,7 @@ def _classify(path: str, line_number: int, line: str, hit: DateHit, today: date)
         reason=reason,
         original=hit.raw,
         ambiguous=hit.ambiguous,
+        page=page_number,
     )
 
 
@@ -181,12 +226,23 @@ def _category(text: str) -> str:
     return best
 
 
-def _title(line: str) -> str:
-    title = re.sub(r"^[\s>*#\-–—\d.)]+", "", line).strip()
-    title = re.sub(r"\s+", " ", title)
-    if len(title) > 104:
-        title = title[:101].rsplit(" ", 1)[0] + "…"
-    return title or "Untitled commitment"
+def _title(line: str, path: str, category: str) -> str:
+    """Build a short, stable label while leaving the source excerpt untouched."""
+    context = f"{line} {PurePath(path).stem}".lower()
+    entity = next(
+        (label for needles, label in ENTITY_HINTS if any(needle in context for needle in needles)),
+        None,
+    )
+    if not entity:
+        stem = re.sub(r"[_-]+", " ", PurePath(path).stem)
+        stem = re.sub(r"\b(?:copy|final|signed|document|doc|file|scan)\b", " ", stem, flags=re.I)
+        stem = re.sub(r"\s+", " ", stem).strip()
+        entity = stem.title() if stem else "Commitment"
+
+    action = CATEGORY_TITLES.get(category, CATEGORY_TITLES["action"])
+    if entity.casefold() == action.casefold() or entity.casefold().endswith(action.casefold()):
+        return entity
+    return f"{entity} {action}"
 
 
 def _future_date(year: int | None, month: int, day: int, today: date) -> date | None:

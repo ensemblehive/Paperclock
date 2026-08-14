@@ -10,7 +10,7 @@ submissions, appointments, and warranties—then turns them into one explainable
 timeline and an `.ics` calendar.
 
 No account. No document upload. No model download. The Python engine runs on your
-machine and every result shows the source line and why it was kept.
+machine and every result shows the source location and why it was kept.
 
 > **Demo GIF placeholder:** a short folder-drop → timeline → calendar export recording belongs here.
 
@@ -74,8 +74,13 @@ paused and resumed without throwing away completed work.
 
 The extraction pipeline recognizes explicit and relative dates, scores nearby
 language for action words, down-ranks historical metadata, explains each decision,
-and removes duplicates. Numeric dates are never guessed silently: choose day-first
-or month-first in the interface, and ambiguous results stay marked.
+and removes duplicates. A small deterministic title cleaner turns raw sentences
+into labels such as “Health Insurance Renewal,” while the untouched excerpt stays
+available for inspection. Dates from one source are grouped as milestones beneath
+one document card. Each milestone can be selected, exported alone, or opened in
+the original local file; PDF results retain their page number. Numeric dates are
+never guessed silently: choose day-first or month-first in the interface, and
+ambiguous results stay marked.
 
 There is no trained model and no telemetry. [`pypdf`](https://pypi.org/project/pypdf/)
 is the only Python dependency; PDF parsing is the one piece not worth reinventing.

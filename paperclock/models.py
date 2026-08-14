@@ -23,6 +23,7 @@ class Commitment:
     reason: str
     original: str
     ambiguous: bool = False
+    page: int | None = None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)

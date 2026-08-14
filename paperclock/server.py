@@ -25,7 +25,7 @@ CANCEL_LOCK = threading.Lock()
 
 
 class PaperclockHandler(BaseHTTPRequestHandler):
-    server_version = "Paperclock/0.2"
+    server_version = "Paperclock/0.3"
 
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -35,7 +35,7 @@ class PaperclockHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/health":
-            self._json({"ok": True, "service": "paperclock", "version": "0.2", "workers": WORKERS})
+            self._json({"ok": True, "service": "paperclock", "version": "0.3", "workers": WORKERS})
         elif path.startswith("/api/scans/"):
             scan_id = path.removeprefix("/api/scans/").split("/", 1)[0]
             self._json(INDEX.snapshot(scan_id))
