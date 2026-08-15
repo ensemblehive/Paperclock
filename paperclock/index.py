@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 import uuid
@@ -11,17 +12,26 @@ from pathlib import Path
 from typing import Iterator
 
 
-ENGINE_VERSION = "0.3"
+ENGINE_VERSION = "0.6"
 
 
 class ScanIndex:
     """Small durable index for resumable scans and unchanged-file reuse."""
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or Path(".paperclock/index.sqlite3")
+        private_directory = path is None and "PAPERCLOCK_DB_PATH" not in os.environ
+        if path:
+            self.path = Path(path)
+        elif "PAPERCLOCK_DB_PATH" in os.environ:
+            self.path = Path(os.environ["PAPERCLOCK_DB_PATH"])
+        else:
+            self.path = Path.home() / ".paperclock" / "index.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if private_directory:
+            _restrict_mode(self.path.parent, 0o700)
         self._write_lock = threading.Lock()
         self._initialize()
+        _restrict_mode(self.path, 0o600)
 
     def start_scan(self, scan_key: str, total: int, date_order: str) -> tuple[str, bool]:
         with self._write_lock, self._connect() as database:
@@ -63,15 +73,15 @@ class ScanIndex:
                     continue
                 cache_key = _cache_key(path, fingerprint, date_order)
                 cached = database.execute(
-                    "SELECT result_json, candidates, warning FROM file_cache WHERE cache_key = ?",
+                    "SELECT result_json, analysis_json, candidates, warning FROM file_cache WHERE cache_key = ?",
                     (cache_key,),
                 ).fetchone()
                 status = "cached" if cached else "pending"
                 database.execute(
                     """
                     INSERT INTO scan_files
-                        (scan_id, path, fingerprint, cache_key, status, result_json, candidates, warning, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (scan_id, path, fingerprint, cache_key, status, result_json, analysis_json, candidates, warning, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(scan_id, path) DO UPDATE SET
                         fingerprint = excluded.fingerprint,
                         cache_key = excluded.cache_key,
@@ -81,6 +91,9 @@ class ScanIndex:
                         result_json = CASE
                             WHEN scan_files.status IN ('done', 'cached') AND scan_files.cache_key = excluded.cache_key
                             THEN scan_files.result_json ELSE excluded.result_json END,
+                        analysis_json = CASE
+                            WHEN scan_files.status IN ('done', 'cached') AND scan_files.cache_key = excluded.cache_key
+                            THEN scan_files.analysis_json ELSE excluded.analysis_json END,
                         candidates = CASE
                             WHEN scan_files.status IN ('done', 'cached') AND scan_files.cache_key = excluded.cache_key
                             THEN scan_files.candidates ELSE excluded.candidates END,
@@ -96,6 +109,7 @@ class ScanIndex:
                         cache_key,
                         status,
                         cached["result_json"] if cached else None,
+                        (cached["analysis_json"] or "[]") if cached else "[]",
                         cached["candidates"] if cached else 0,
                         cached["warning"] if cached else None,
                         _now(),
@@ -122,8 +136,10 @@ class ScanIndex:
         commitments: list[dict[str, object]],
         candidates: int,
         warning: str | None,
+        analyses: list[dict[str, object]] | None = None,
     ) -> None:
         result_json = json.dumps(commitments, separators=(",", ":"))
+        analysis_json = json.dumps(analyses or [], separators=(",", ":"))
         status = "skipped" if warning else "done"
         with self._write_lock, self._connect() as database:
             session = self._session(database, scan_id)
@@ -131,23 +147,24 @@ class ScanIndex:
             if not warning:
                 database.execute(
                     """
-                    INSERT INTO file_cache (cache_key, result_json, candidates, warning, updated_at)
-                    VALUES (?, ?, ?, NULL, ?)
+                    INSERT INTO file_cache (cache_key, result_json, analysis_json, candidates, warning, updated_at)
+                    VALUES (?, ?, ?, ?, NULL, ?)
                     ON CONFLICT(cache_key) DO UPDATE SET
                         result_json = excluded.result_json,
+                        analysis_json = excluded.analysis_json,
                         candidates = excluded.candidates,
                         warning = NULL,
                         updated_at = excluded.updated_at
                     """,
-                    (cache_key, result_json, candidates, _now()),
+                    (cache_key, result_json, analysis_json, candidates, _now()),
                 )
             database.execute(
                 """
                 UPDATE scan_files
-                SET status = ?, result_json = ?, candidates = ?, warning = ?, updated_at = ?
+                SET status = ?, result_json = ?, analysis_json = ?, candidates = ?, warning = ?, updated_at = ?
                 WHERE scan_id = ? AND path = ? AND fingerprint = ?
                 """,
-                (status, result_json, candidates, warning, _now(), scan_id, path, fingerprint),
+                (status, result_json, analysis_json, candidates, warning, _now(), scan_id, path, fingerprint),
             )
             database.execute(
                 "UPDATE scan_sessions SET updated_at = ? WHERE id = ?",
@@ -167,13 +184,14 @@ class ScanIndex:
             session = self._session(database, scan_id)
             rows = database.execute(
                 """
-                SELECT path, status, result_json, candidates, warning
+                SELECT path, status, result_json, analysis_json, candidates, warning
                 FROM scan_files WHERE scan_id = ? ORDER BY updated_at, path
                 """,
                 (scan_id,),
             ).fetchall()
 
         commitments: list[dict[str, object]] = []
+        bank_statements: list[dict[str, object]] = []
         warnings: list[str] = []
         candidates = 0
         counts = {"processed": 0, "cached": 0, "skipped": 0, "pending": 0}
@@ -190,10 +208,14 @@ class ScanIndex:
             candidates += int(row["candidates"] or 0)
             if row["result_json"]:
                 commitments.extend(json.loads(row["result_json"]))
+            if row["analysis_json"]:
+                bank_statements.extend(json.loads(row["analysis_json"]))
             if row["warning"]:
                 warnings.append(str(row["warning"]))
 
-        commitments = _deduplicate(commitments)
+        commitments, duplicate_count = _deduplicate(commitments)
+        if duplicate_count:
+            warnings.append(f"duplicate_commitment: {duplicate_count} repeated commitment(s)")
         commitments.sort(key=lambda item: (str(item.get("date", "")), -int(item.get("confidence", 0))))
         elapsed = max(0.001, (_parse_time(str(session["updated_at"])) - _parse_time(str(session["created_at"]))).total_seconds())
         rate = counts["processed"] / elapsed
@@ -212,6 +234,7 @@ class ScanIndex:
             "dates_reviewed": candidates,
             "noise_removed": max(0, candidates - len(commitments)),
             "commitments": commitments,
+            "bank_statements": bank_statements,
             "warnings": warnings[:24],
             "rate": round(rate, 1),
             "eta_seconds": eta,
@@ -246,6 +269,7 @@ class ScanIndex:
                     cache_key TEXT NOT NULL,
                     status TEXT NOT NULL,
                     result_json TEXT,
+                    analysis_json TEXT NOT NULL DEFAULT '[]',
                     candidates INTEGER NOT NULL DEFAULT 0,
                     warning TEXT,
                     updated_at TEXT NOT NULL,
@@ -255,6 +279,7 @@ class ScanIndex:
                 CREATE TABLE IF NOT EXISTS file_cache (
                     cache_key TEXT PRIMARY KEY,
                     result_json TEXT NOT NULL,
+                    analysis_json TEXT NOT NULL DEFAULT '[]',
                     candidates INTEGER NOT NULL,
                     warning TEXT,
                     updated_at TEXT NOT NULL
@@ -265,6 +290,10 @@ class ScanIndex:
                     ON scan_files(scan_id, status);
                 """
             )
+            for table in ("scan_files", "file_cache"):
+                columns = {str(row[1]) for row in database.execute(f"PRAGMA table_info({table})")}
+                if "analysis_json" not in columns:
+                    database.execute(f"ALTER TABLE {table} ADD COLUMN analysis_json TEXT NOT NULL DEFAULT '[]'")
             database.execute("PRAGMA optimize")
 
     @contextmanager
@@ -295,14 +324,15 @@ def _cache_key(path: str, fingerprint: str, date_order: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _deduplicate(items: list[dict[str, object]]) -> list[dict[str, object]]:
-    best: dict[tuple[str, str, str], dict[str, object]] = {}
+def _deduplicate(items: list[dict[str, object]]) -> tuple[list[dict[str, object]], int]:
+    best: dict[tuple[str, str, str, str], dict[str, object]] = {}
     for item in items:
         title = " ".join(str(item.get("title", "")).lower().split())[:80]
-        key = (str(item.get("date", "")), str(item.get("source", "")), title)
+        identity = str(item.get("document_id") or item.get("source", ""))
+        key = (str(item.get("date", "")), str(item.get("category", "")), title, identity)
         if key not in best or int(item.get("confidence", 0)) > int(best[key].get("confidence", 0)):
             best[key] = item
-    return list(best.values())
+    return list(best.values()), len(items) - len(best)
 
 
 def _now() -> str:
@@ -311,3 +341,11 @@ def _now() -> str:
 
 def _parse_time(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+def _restrict_mode(path: Path, mode: int) -> None:
+    try:
+        path.chmod(mode)
+    except OSError:
+        # Some platforms and network filesystems do not expose POSIX modes.
+        pass

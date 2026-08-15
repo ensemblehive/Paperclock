@@ -28,7 +28,7 @@ self.onmessage = async (event) => {
       }
 
       const extension = entry.path.split(".").pop()?.toLowerCase() ?? "";
-      const binary = extension === "pdf" || extension === "docx";
+      const binary = extension === "pdf" || extension === "docx" || extension === "pages" || extension === "msg";
       const content = binary
         ? await readBase64(entry, index, entries.length)
         : await readText(entry, index, entries.length);

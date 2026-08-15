@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
 from .calendar import make_calendar
-from .readers import DOCUMENT_EXTENSIONS, SUPPORTED_EXTENSIONS
+from .policy import BINARY_EXTENSIONS, is_hidden_name, is_ignored_directory, is_supported_path
 from .scanner import scan_files
 from .server import serve
 
@@ -43,14 +44,26 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _load_path(path: Path) -> list[dict[str, object]]:
-    candidates = [path] if path.is_file() else sorted(path.rglob("*"))
+    candidates: list[Path] = []
+    if path.is_file():
+        candidates = [path]
+    elif path.is_dir():
+        if is_ignored_directory(path.name):
+            return []
+        for root, directory_names, file_names in os.walk(path):
+            directory_names[:] = sorted(name for name in directory_names if not is_ignored_directory(name))
+            candidates.extend(
+                Path(root) / name
+                for name in sorted(file_names)
+                if not is_hidden_name(name) and is_supported_path(name)
+            )
     files: list[dict[str, object]] = []
     for candidate in candidates:
-        if not candidate.is_file() or candidate.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        if not candidate.is_file() or is_hidden_name(candidate.name) or not is_supported_path(candidate):
             continue
         raw = candidate.read_bytes()
         relative = str(candidate if path.is_file() else candidate.relative_to(path))
-        if candidate.suffix.lower() in DOCUMENT_EXTENSIONS:
+        if candidate.suffix.lower() in BINARY_EXTENSIONS:
             content = base64.b64encode(raw).decode("ascii")
             encoding = "base64"
         else:

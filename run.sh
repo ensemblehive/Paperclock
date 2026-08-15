@@ -4,7 +4,9 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-if [[ ! -x .venv/bin/python ]]; then
+if [[ ! -x .venv/bin/python ]] || ! .venv/bin/python -c "import sys" 2>/dev/null; then
+  echo "Setting up Python virtual environment..."
+  rm -rf .venv
   python3 -m venv .venv
   .venv/bin/pip install --quiet --upgrade pip
   .venv/bin/pip install --quiet -e .

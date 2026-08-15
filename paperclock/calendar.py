@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import PurePath
 
@@ -20,9 +21,15 @@ def make_calendar(commitments: list[dict[str, object]], name: str = "Paperclock"
         title = str(item.get("title", "Commitment"))
         source = str(item.get("source", ""))
         page = item.get("page")
-        event_id = str(item.get("id", raw_date))
+        event_id = hashlib.sha256(str(item.get("id", raw_date)).encode("utf-8")).hexdigest()[:24]
         location = f"{source}, page {page}" if isinstance(page, int) and page > 0 else source
-        description = f"Found in {location}. {item.get('reason', '')}".strip()
+        base_desc = f"Found in {location}. {item.get('reason', '')}".strip()
+        extra_parts = []
+        notice_days = item.get("notice_days")
+        if isinstance(notice_days, int) and notice_days > 0:
+            extra_parts.append(f"Requires {notice_days}-day notice")
+        description = f"{base_desc} | {' | '.join(extra_parts)}" if extra_parts else base_desc
+
         lines.extend(
             [
                 "BEGIN:VEVENT",
@@ -33,6 +40,16 @@ def make_calendar(commitments: list[dict[str, object]], name: str = "Paperclock"
                 f"DESCRIPTION:{_escape(description)}",
                 f"CATEGORIES:{_escape(str(item.get('category', 'action')).title())}",
                 "TRANSP:TRANSPARENT",
+                "BEGIN:VALARM",
+                "ACTION:DISPLAY",
+                f"DESCRIPTION:{_escape(title)} (1 week reminder)",
+                "TRIGGER:-P7D",
+                "END:VALARM",
+                "BEGIN:VALARM",
+                "ACTION:DISPLAY",
+                f"DESCRIPTION:{_escape(title)} (1 day reminder)",
+                "TRIGGER:-P1D",
+                "END:VALARM",
                 "END:VEVENT",
             ]
         )
@@ -41,4 +58,5 @@ def make_calendar(commitments: list[dict[str, object]], name: str = "Paperclock"
 
 
 def _escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")

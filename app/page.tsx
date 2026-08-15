@@ -4,14 +4,59 @@ import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "re
 import { flushSync } from "react-dom";
 
 const ENGINE = "http://127.0.0.1:4312";
-const TEXT_TYPES = new Set([
-  "txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "yaml", "yml", "toml",
-  "ini", "cfg", "html", "htm", "xml", "eml", "ics", "rtf", "log",
+const TEXT_TYPES = new Set(["eml", "csv"]);
+const BINARY_TYPES = new Set(["pdf", "docx", "pages", "msg", "xlsx", "png", "jpg", "jpeg", "webp", "tiff"]);
+const IGNORED_DIRECTORIES = new Set([
+  ".git", ".svn", ".hg", "venv", ".venv", "env", "site-packages", "__pycache__",
+  "node_modules", "bower_components", "build", "dist", "target", "out", "bin", "obj",
+  "library", "appdata", "tmp", ".cache",
 ]);
-const BINARY_TYPES = new Set(["pdf", "docx"]);
 const DISCOVERY_CONCURRENCY = 8;
 const ENUMERATION_CHUNK = 250;
-const EXTRACTION_REVISION = "3";
+const EXTRACTION_REVISION = "8";
+
+type BankSummaryData = {
+  id: string;
+  source: string;
+  title: string;
+  statement_start: string;
+  statement_end: string;
+  opening_balance: number | null;
+  closing_balance: number | null;
+  balance_change: number | null;
+  total_income: number;
+  total_expense: number;
+  net_cashflow: number;
+  transaction_count: number;
+  credit_count: number;
+  debit_count: number;
+  average_expense: number;
+  currency: string;
+  categories: Array<{
+    category: string;
+    amount: number;
+    percentage: number;
+    count: number;
+  }>;
+  top_expenses: Array<{
+    date: string;
+    description: string;
+    amount: number;
+    category: string;
+  }>;
+  largest_credit: {
+    date: string;
+    description: string;
+    amount: number;
+  } | null;
+  recurring_payments: Array<{
+    description: string;
+    amount: number;
+    count: number;
+  }>;
+  verification: "verified" | "discrepancy" | "unverifiable";
+  rows_rejected: number;
+};
 
 type Commitment = {
   id: string;
@@ -26,6 +71,13 @@ type Commitment = {
   original: string;
   ambiguous: boolean;
   page?: number | null;
+  document_id?: string | null;
+  domain?: string | null;
+  entity?: string | null;
+  periodicity?: string | null;
+  summary?: string | null;
+  notice_days?: number | null;
+  action_date?: string | null;
 };
 
 type ScanResult = {
@@ -41,6 +93,7 @@ type ScanResult = {
   dates_reviewed: number;
   noise_removed: number;
   commitments: Commitment[];
+  bank_statements: BankSummaryData[];
   warnings: string[];
   rate: number;
   eta_seconds: number | null;
@@ -118,13 +171,24 @@ type ScanActivity = {
 const categoryNames: Record<string, string> = {
   expiry: "Expiry",
   renewal: "Renewal",
-  cancellation: "Cancel window",
-  money: "Money",
+  cancellation: "Cancel Window",
+  money: "Money Due",
   submission: "Submission",
   appointment: "Appointment",
   delivery: "Delivery",
-  warranty: "Coverage",
-  action: "Action",
+  warranty: "Coverage Ends",
+  taxes: "Taxes & IRS",
+  housing: "Housing & Lease",
+  insurance: "Insurance Policy",
+  subscription: "Subscription",
+  utilities: "Utilities & Bills",
+  banking: "Banking & Loans",
+  legal: "Legal & NDAs",
+  vehicle: "Vehicle Milestone",
+  travel: "Travel & Identity",
+  employment: "Employment & HR",
+  billing: "Invoices & Billing",
+  action: "Action Due",
 };
 
 function isoOffset(days: number) {
@@ -136,25 +200,39 @@ function isoOffset(days: number) {
 
 const demoFiles = (): UploadFile[] => [
   {
-    path: "Household/energy-plan.txt",
-    content: `Your fixed-rate energy plan renews automatically on ${isoOffset(38)}. Cancel before ${isoOffset(10)} to avoid the new variable rate.\nStatement date: ${isoOffset(-12)}.`,
-    encoding: "text",
-    modified: new Date().toISOString(),
-    size: 140,
-  },
-  {
-    path: "Work/vendor-notes.md",
-    content: `## Atlas rollout\n- Security review must be submitted by ${isoOffset(21)}.\n- Production certificate expires ${isoOffset(67)}.\n- Kickoff completed on ${isoOffset(-40)}.`,
+    path: "Household/energy-plan.eml",
+    content: `Subject: Energy plan renewal\nYour fixed-rate energy plan renews automatically on ${isoOffset(38)}. Cancel before ${isoOffset(10)} to avoid the new variable rate.\nStatement date: ${isoOffset(-12)}.`,
     encoding: "text",
     modified: new Date().toISOString(),
     size: 190,
   },
   {
-    path: "Receipts/camera-warranty.txt",
-    content: `Purchase date: ${isoOffset(-280)}\nExtended coverage is valid until ${isoOffset(45)}. File any repair claim before that date.`,
+    path: "Work/vendor-agreement.eml",
+    content: `Subject: Atlas vendor agreement\nThe contract security review must be submitted by ${isoOffset(21)}. The agreement terminates on ${isoOffset(67)}. Cancellation requires 30 days notice prior to termination.`,
     encoding: "text",
     modified: new Date().toISOString(),
-    size: 130,
+    size: 260,
+  },
+  {
+    path: "Receipts/camera-warranty.eml",
+    content: `Subject: Sony Camera warranty\nPurchase date: ${isoOffset(-280)}\nThe warranty coverage is valid until ${isoOffset(45)}. File any repair claim before that date.`,
+    encoding: "text",
+    modified: new Date().toISOString(),
+    size: 160,
+  },
+  {
+    path: "Taxes/quarterly-estimate.eml",
+    content: `Subject: IRS Estimated Tax Notice\nYour Q3 federal estimated tax payment is due by ${isoOffset(18)}.`,
+    encoding: "text",
+    modified: new Date().toISOString(),
+    size: 170,
+  },
+  {
+    path: "Auto/car-insurance.eml",
+    content: `Subject: Geico Auto Policy Renewal\nYour annual vehicle insurance premium of $185.00/mo (Policy #POL-99210) renews on ${isoOffset(28)}. Cancellation requires 14 days notice.`,
+    encoding: "text",
+    modified: new Date().toISOString(),
+    size: 195,
   },
 ];
 
@@ -199,14 +277,26 @@ export default function Home() {
       if (dismissed.has(item.id)) return false;
       const days = dayDifference(today, new Date(`${item.date}T12:00:00`));
       if (filter === "soon") return days >= 0 && days <= 30;
-      if (filter === "expiry") return ["expiry", "renewal", "warranty"].includes(item.category);
+      if (filter === "expiry") return ["expiry", "renewal", "warranty", "insurance", "subscription"].includes(item.category);
+      if (filter === "money") return ["money", "billing", "taxes", "utilities"].includes(item.category);
+      if (filter === "taxes") return item.category === "taxes" || item.domain === "taxes";
+      if (filter === "banking") return item.category === "banking" || item.domain === "banking";
+      if (filter === "employment") return item.category === "employment" || item.domain === "employment";
+      if (filter === "insurance") return item.category === "insurance" || item.domain === "insurance";
+      if (filter === "housing") return item.category === "housing" || item.domain === "housing";
+      if (filter === "subscription") return item.category === "subscription" || item.domain === "subscription";
+      if (filter === "utilities") return item.category === "utilities" || item.domain === "utilities";
+      if (filter === "legal") return item.category === "legal" || item.domain === "legal";
+      if (filter === "warranty") return item.category === "warranty" || item.domain === "warranty";
+      if (filter === "vehicle") return item.category === "vehicle" || item.domain === "vehicle";
+      if (filter === "travel") return item.category === "travel" || item.domain === "travel";
       return true;
     });
   }, [dismissed, filter, result]);
 
   async function runScan(entries: ScanEntry[]) {
     if (!entries.length) {
-      setError("No supported files found. Try PDF, DOCX, email, Markdown, CSV, or plain text.");
+      setError("No supported files found. Try PDF, DOCX, Pages, EML, or Outlook MSG.");
       return;
     }
     lastEntriesRef.current = entries;
@@ -365,7 +455,7 @@ export default function Home() {
         setActivity(null);
         setError(
           discoveredCount
-            ? `Paperclock found ${discoveredCount.toLocaleString()} ${discoveredCount === 1 ? "file" : "files"}, but none had a supported extension. Try PDF, DOCX, EML, ICS, Markdown, CSV, JSON, or plain text.`
+            ? `Paperclock found ${discoveredCount.toLocaleString()} ${discoveredCount === 1 ? "file" : "files"}, but none were PDF, DOCX, Pages, EML, or Outlook MSG.`
             : "Paperclock could not open that dropped folder. Use “choose a folder” to select it through the folder picker.",
         );
         return;
@@ -382,8 +472,6 @@ export default function Home() {
     const input = inputRef.current;
     if (!input || loading) return;
     pickerRequestRef.current += 1;
-    // Commit the status surface before the native picker takes control. Large
-    // folders can take the browser seconds to materialize before `change` fires.
     flushSync(() => {
       setLoading(true);
       setError("");
@@ -474,8 +562,6 @@ export default function Home() {
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
-    // Capture protected drag handles inside the drop event, but never flatten a
-    // modern directory's FileList before the first frame can be painted.
     const selection = captureDroppedSelection(event.dataTransfer);
     setLoading(true);
     setError("");
@@ -542,7 +628,7 @@ export default function Home() {
       });
       if (response.ok) setResult(await response.json());
     } catch {
-      // The active request was already stopped; the next selection will reuse cached work.
+      // Intentionally empty
     }
   }
 
@@ -572,7 +658,38 @@ export default function Home() {
     }
   }
 
-  function openSource(item: Commitment) {
+  function downloadCSV(commitments: Commitment[], filename = "paperclock-commitments.csv") {
+    if (!commitments.length) {
+      setError("No commitments available to export.");
+      return;
+    }
+    setError("");
+    const headers = ["Date", "Category", "Title", "Periodicity", "Notice Days", "Action Date", "Summary", "Source", "Confidence", "Reason"];
+    const rows = commitments.map((item) => [
+      `"${item.date}"`,
+      `"${(item.category || "").replace(/"/g, '""')}"`,
+      `"${(item.title || "").replace(/"/g, '""')}"`,
+      `"${item.periodicity || ""}"`,
+      item.notice_days !== undefined && item.notice_days !== null ? item.notice_days : "",
+      `"${item.action_date || ""}"`,
+      `"${(item.summary || item.snippet || "").replace(/"/g, '""')}"`,
+      `"${(item.source || "").replace(/"/g, '""')}"`,
+      item.confidence,
+      `"${(item.reason || "").replace(/"/g, '""')}"`,
+    ]);
+    const csvContent = [headers.join(","), ...rows.map((row) => row.join(","))].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function openSource(item: { source: string; page?: number | null }) {
     setError("");
     const entry = lastEntriesRef.current.find((candidate) => candidate.path === item.source);
     if (!entry?.file) {
@@ -641,7 +758,7 @@ export default function Home() {
               <strong>{dragging ? "Release to scan this folder" : loading ? "Mapping the paper trail…" : "Drop a folder here"}</strong>
               <span>{dragging ? "Paperclock is ready" : <>or <button onClick={chooseFolder}>choose a folder</button> · any number of files</>}</span>
             </div>
-            <div className="format-row"><span>PDF</span><span>DOCX</span><span>EMAIL</span><span>TEXT</span><span>CALENDAR</span></div>
+            <div className="format-row"><span>PDF</span><span>DOCX</span><span>PAGES</span><span>EML</span><span>MSG</span></div>
           </div>
           {loading && !result && activity && (
             <div className="preflight" role="status" aria-live="polite">
@@ -692,6 +809,7 @@ export default function Home() {
           rescan={chooseFolder}
           downloadSelected={() => void downloadCalendar(result.commitments.filter((item) => selected.has(item.id)))}
           downloadOne={(item) => void downloadCalendar([item], `${calendarFilename(item.title)}.ics`)}
+          downloadCSV={() => downloadCSV(result.commitments)}
           openSource={openSource}
           loading={loading}
           error={error}
@@ -717,7 +835,7 @@ export default function Home() {
 
 function Results({
   result, visible, filter, setFilter, dismiss, selected, toggleSelected, selectVisible,
-  clearSelected, rescan, downloadSelected, downloadOne, openSource, loading, error,
+  clearSelected, rescan, downloadSelected, downloadOne, downloadCSV, openSource, loading, error,
   activity, cancelScan, resumeScan,
 }: {
   result: ScanResult;
@@ -732,24 +850,29 @@ function Results({
   rescan: () => void;
   downloadSelected: () => void;
   downloadOne: (item: Commitment) => void;
-  openSource: (item: Commitment) => void;
+  downloadCSV: () => void;
+  openSource: (item: { source: string; page?: number | null }) => void;
   loading: boolean;
   error: string;
   activity: ScanActivity | null;
   cancelScan: () => void;
   resumeScan: () => void;
 }) {
-  const today = new Date(`${result.today}T12:00:00`);
+  const today = useMemo(() => new Date(`${result.today}T12:00:00`), [result.today]);
   const nearest = result.commitments.find((item) => new Date(`${item.date}T12:00:00`) >= today);
   const groups = groupDocuments(visible, today);
-  const documentCount = new Set(result.commitments.map((item) => item.source)).size;
+
+  const showBankStatements = filter === "all" || filter === "banking";
+  const sourceNames = new Set(result.commitments.map((item) => item.source));
+  result.bank_statements.forEach((statement) => sourceNames.add(statement.source));
+  const documentTotal = sourceNames.size;
 
   return (
     <section className="results-shell">
       <aside className="summary">
         <div>
           <p className="section-kicker">Folder pulse</p>
-          <h2>{documentCount}<span> documents<br />need attention</span></h2>
+          <h2>{documentTotal}<span> documents<br />need attention</span></h2>
           <div className="summary__stats">
             <div><strong>{result.commitments.length}</strong><span>milestones found</span></div>
             <div><strong>{result.noise_removed}</strong><span>dates ignored</span></div>
@@ -769,8 +892,11 @@ function Results({
           <button className="primary" disabled={selected.size === 0} onClick={downloadSelected}>
             Add {selected.size || "selected"} to calendar <span>↓</span>
           </button>
+          <button className="secondary" onClick={downloadCSV} title="Export commitments as CSV">
+            Export CSV / Spreadsheet <span>↓</span>
+          </button>
           <button className="secondary" disabled={loading} onClick={rescan}>{loading ? "Scanning…" : "Scan another folder"}</button>
-          <p>Choose only the milestones you want. File contents never enter calendar exports.</p>
+          <p>Deterministic local processing. File contents never leave your machine.</p>
         </div>
       </aside>
 
@@ -778,28 +904,54 @@ function Results({
         {activity && activity.phase !== "complete" && (
           <ScanProgress result={result} activity={activity} cancelScan={cancelScan} resumeScan={resumeScan} />
         )}
+
         <div className="timeline-head">
-          <div>
+          <div className="timeline-title-wrap">
             <p className="section-kicker">Your horizon</p>
             <h1>{activity?.active ? "Reading your horizon" : "What needs attention"}</h1>
           </div>
-          <div className="filters" aria-label="Filter commitments">
-            {[["all", "All"], ["soon", "Next 30 days"], ["expiry", "Expiries"], ["money", "Money"]].map(([value, label]) => (
-              <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>
-            ))}
+          <div className="filters-container">
+            <div className="filters" aria-label="Filter commitments">
+              {[
+                ["all", "All"],
+                ["soon", "Next 30 days"],
+                ["money", "Money & Invoices"],
+                ["expiry", "Expiries & Renewals"],
+                ["taxes", "Taxes & IRS"],
+                ["banking", "Bank Statements"],
+                ["employment", "Salary & Payroll"],
+                ["insurance", "Insurance"],
+                ["housing", "Housing & Lease"],
+                ["subscription", "Subscriptions"],
+                ["utilities", "Utilities"],
+                ["legal", "Legal & NDAs"],
+                ["warranty", "Warranties"],
+                ["vehicle", "Vehicle"],
+                ["travel", "Travel & Visa"],
+              ].map(([value, label]) => (
+                <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>
+              ))}
+            </div>
           </div>
         </div>
         {error && <div className="notice notice--results" role="alert">{error}</div>}
         {result.warnings.length > 0 && (
           <details className="warnings"><summary>{result.files_skipped} files skipped</summary>{result.warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>
         )}
-        {visible.length === 0 && activity?.active ? (
+        {showBankStatements && result.bank_statements.length > 0 && (
+          <section className="statement-grid" aria-label="Bank statement analyses">
+            {result.bank_statements.map((statement) => (
+              <BankStatementCard key={statement.id} data={statement} openSource={openSource} />
+            ))}
+          </section>
+        )}
+        {visible.length === 0 && (!showBankStatements || result.bank_statements.length === 0) && activity?.active ? (
           <div className="waiting-state">
             <div className="waiting-papers" aria-hidden="true"><i /><i /><i /></div>
             <h3>Dates will appear here as they’re found</h3>
             <p>Paperclock is reading in small batches, so the interface stays responsive.</p>
           </div>
-        ) : visible.length === 0 ? (
+        ) : visible.length === 0 && (!showBankStatements || result.bank_statements.length === 0) ? (
           <div className="empty-state"><span>○</span><h3>No commitments in this view</h3><p>Try another filter or scan a different folder.</p></div>
         ) : (
           <div className="groups">
@@ -888,7 +1040,7 @@ function DocumentCard({
   toggleSelected: (id: string) => void;
   dismiss: (id: string) => void;
   downloadOne: (item: Commitment) => void;
-  openSource: (item: Commitment) => void;
+  openSource: (item: { source: string; page?: number | null }) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const leadDate = new Date(`${document.lead.date}T12:00:00`);
@@ -931,6 +1083,19 @@ function DocumentCard({
                     {item.ambiguous && <span className="ambiguous">Check date order</span>}
                   </div>
                   <h3>{item.title}</h3>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", margin: "4px 0" }}>
+                    {item.notice_days && item.action_date && (
+                      <span className="fact-badge fact-badge--notice">
+                        ⚠️ Requires {item.notice_days}d notice • Action by {shortDate(item.action_date)}
+                      </span>
+                    )}
+                  </div>
+
+                  {item.summary && (
+                    <p className="summary-sentence">{item.summary}</p>
+                  )}
+
                   <p className="source">
                     <span aria-hidden="true">⌁</span> {item.page ? `page ${item.page}` : `line ${item.line}`}
                   </p>
@@ -951,6 +1116,122 @@ function DocumentCard({
         </div>
       )}
     </article>
+  );
+}
+
+function BankStatementCard({
+  data, openSource,
+}: {
+  data: BankSummaryData;
+  openSource: (item: { source: string }) => void;
+}) {
+  return (
+    <article className="statement-card">
+      <header className="statement-card__head">
+        <div>
+          <span className="document-card__eyebrow">Verified statement analysis</span>
+          <h2>{documentLabel(data.source)}</h2>
+          <p>{data.source}</p>
+        </div>
+        <button onClick={() => openSource(data)}>Open source <span>↗</span></button>
+      </header>
+      <BankPulse data={data} />
+      <p className={`statement-card__verification statement-card__verification--${data.verification}`}>
+        {data.verification === "verified"
+          ? "Running balances reconcile"
+          : data.verification === "discrepancy"
+            ? "Balance discrepancy found—review before relying on totals"
+            : "Totals parsed; running balances were not available to reconcile"}
+        {data.rows_rejected > 0 ? ` · ${data.rows_rejected} uncertain ${data.rows_rejected === 1 ? "row" : "rows"} excluded` : ""}
+      </p>
+    </article>
+  );
+}
+
+function BankPulse({ data }: { data: BankSummaryData }) {
+  const sym = data.currency || "$";
+  const money = (value: number) => `${sym}${Math.abs(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const largestExpense = data.top_expenses?.[0];
+
+  return (
+    <div className="bank-pulse" aria-label="Bank Statement Cashflow Breakdown">
+      <div className="bank-pulse__header">
+        <span className="bank-pulse__title">STATEMENT REVIEW · {shortDate(data.statement_start)}—{shortDate(data.statement_end)}</span>
+        <span className="bank-pulse__count">{data.transaction_count} transactions</span>
+      </div>
+
+      <div className="bank-pulse__metrics">
+        <div className="bank-pulse__metric">
+          <span>Money in · {data.credit_count} credits</span>
+          <strong className="text-income">{money(data.total_income)}</strong>
+        </div>
+        <div className="bank-pulse__metric">
+          <span>Money out · {data.debit_count} debits</span>
+          <strong className="text-expense">{money(data.total_expense)}</strong>
+        </div>
+        <div className="bank-pulse__metric">
+          <span>Net cashflow</span>
+          <strong className={data.net_cashflow >= 0 ? "text-income" : "text-expense"}>{data.net_cashflow < 0 ? "−" : "+"}{money(data.net_cashflow)}</strong>
+        </div>
+        <div className="bank-pulse__metric">
+          <span>Average outgoing</span>
+          <strong>{money(data.average_expense)}</strong>
+        </div>
+      </div>
+
+      {(data.opening_balance !== null || data.closing_balance !== null) && (
+        <div className="balance-journey">
+          <div><span>Opening balance</span><strong>{data.opening_balance !== null ? money(data.opening_balance) : "Not stated"}</strong></div>
+          <i aria-hidden="true">→</i>
+          <div><span>Closing balance</span><strong>{data.closing_balance !== null ? money(data.closing_balance) : "Not stated"}</strong></div>
+          {data.balance_change !== null && (
+            <div className={data.balance_change >= 0 ? "balance-change balance-change--up" : "balance-change balance-change--down"}>
+              <span>Change</span><strong>{data.balance_change < 0 ? "−" : "+"}{money(data.balance_change)}</strong>
+            </div>
+          )}
+        </div>
+      )}
+
+      {(largestExpense || data.largest_credit || data.recurring_payments?.length > 0) && (
+        <div className="bank-insights">
+          {largestExpense && <div><span>Largest outgoing</span><strong>{largestExpense.description}</strong><small>{money(largestExpense.amount)} · {shortDate(largestExpense.date)}</small></div>}
+          {data.largest_credit && <div><span>Largest incoming</span><strong>{data.largest_credit.description}</strong><small>{money(data.largest_credit.amount)} · {shortDate(data.largest_credit.date)}</small></div>}
+          {data.recurring_payments?.length > 0 && <div><span>Repeated payment</span><strong>{data.recurring_payments[0].description}</strong><small>{money(data.recurring_payments[0].amount)} · {data.recurring_payments[0].count} times</small></div>}
+        </div>
+      )}
+
+      {data.categories && data.categories.length > 0 && (
+        <div className="bank-categories">
+          <p className="bank-categories__title">Top Spending Outflows</p>
+          <div className="bank-category-list">
+            {data.categories.slice(0, 4).map((cat) => (
+              <div className="bank-category-item" key={cat.category}>
+                <div className="bank-category-item__head">
+                  <span>{cat.category}</span>
+                  <strong>{sym}{cat.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({cat.percentage}%)</strong>
+                </div>
+                <div className="bank-category-bar">
+                  <div className="bank-category-bar__fill" style={{ width: `${Math.min(100, Math.max(8, cat.percentage))}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data.top_expenses && data.top_expenses.length > 0 && (
+        <div className="bank-top-expenses">
+          <p className="bank-categories__title">Largest outgoings</p>
+          {data.top_expenses.slice(0, 5).map((expense) => (
+            <div key={`${expense.date}-${expense.description}-${expense.amount}`}>
+              <time>{shortDate(expense.date)}</time>
+              <span>{expense.description}</span>
+              <strong>{money(expense.amount)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1005,7 +1286,7 @@ async function collectDroppedFiles(
 
   const visitFile = async (name: string, relativePath: string, load: () => Promise<File>) => {
     discovered += 1;
-    const accepted = isSupportedFileName(name);
+    const accepted = !isIgnoredPath(relativePath) && isSupportedFileName(name);
     if (accepted) supported += 1;
     const now = performance.now();
     if (discovered === 1 || discovered % 100 === 0 || now - lastPaint > 80) {
@@ -1014,21 +1295,29 @@ async function collectDroppedFiles(
       await yieldToMainThread();
     }
     if (!accepted) return;
-    const file = await load();
-    collected.push({ file, relativePath: relativePath || file.name });
+    try {
+      const file = await load();
+      collected.push({ file, relativePath: relativePath || file.name });
+    } catch {
+      // Ignore individual unreadable file
+    }
   };
 
   let traversedSource = false;
   for (const source of selection.sources) {
     if (source.handlePromise) {
-      const handle = await source.handlePromise;
-      if (handle) {
-        traversedSource = true;
-        await walkHandle(handle, "", visitFile);
-      } else if (source.fallbackFile) {
-        traversedSource = true;
-        const file = source.fallbackFile;
-        await visitFile(file.name, file.name, async () => file);
+      try {
+        const handle = await source.handlePromise;
+        if (handle) {
+          traversedSource = true;
+          await walkHandle(handle, "", visitFile);
+        } else if (source.fallbackFile) {
+          traversedSource = true;
+          const file = source.fallbackFile;
+          await visitFile(file.name, file.name, async () => file);
+        }
+      } catch {
+        // Source error fallback
       }
       continue;
     }
@@ -1072,8 +1361,6 @@ function captureDroppedSelection(dataTransfer: DataTransfer): DroppedSelection {
   }
   return {
     sources,
-    // This synchronous compatibility path is used only by browsers without a
-    // directory-entry API. Modern folder drops avoid this potentially large copy.
     fallbackFiles: hasEntryApi ? [] : Array.from(dataTransfer.files),
   };
 }
@@ -1084,20 +1371,28 @@ async function walkHandle(
   visitFile: (name: string, relativePath: string, load: () => Promise<File>) => Promise<void>,
 ): Promise<void> {
   const path = parentPath ? `${parentPath}/${handle.name}` : handle.name;
+  if (handle.kind === "directory" && isIgnoredDirectoryName(handle.name)) return;
   if (handle.kind === "file" && handle.getFile) {
-    await visitFile(handle.name, path, () => handle.getFile!());
+    try {
+      await visitFile(handle.name, path, () => handle.getFile!());
+    } catch {
+      // Handled in visitFile
+    }
     return;
   }
   if (handle.kind === "directory" && handle.values) {
-    let pending: Promise<void>[] = [];
-    for await (const child of handle.values()) {
-      pending.push(walkHandle(child, path, visitFile));
-      if (pending.length === DISCOVERY_CONCURRENCY) {
-        await Promise.all(pending);
-        pending = [];
+    try {
+      const children: FileSystemHandleLike[] = [];
+      for await (const child of handle.values()) {
+        children.push(child);
       }
+      for (let index = 0; index < children.length; index += DISCOVERY_CONCURRENCY) {
+        const batch = children.slice(index, index + DISCOVERY_CONCURRENCY);
+        await Promise.all(batch.map((child) => walkHandle(child, path, visitFile).catch(() => {})));
+      }
+    } catch {
+      // Directory iteration catch
     }
-    await Promise.all(pending);
   }
 }
 
@@ -1107,21 +1402,30 @@ async function walkLegacyEntry(
   visitFile: (name: string, relativePath: string, load: () => Promise<File>) => Promise<void>,
 ): Promise<void> {
   const path = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+  if (entry.isDirectory && isIgnoredDirectoryName(entry.name)) return;
   if (entry.isFile && entry.file) {
-    await visitFile(entry.name, path, () => new Promise<File>((resolve, reject) => entry.file?.(resolve, reject)));
+    try {
+      await visitFile(entry.name, path, () => new Promise<File>((resolve, reject) => entry.file?.(resolve, reject)));
+    } catch {
+      // Handled in visitFile
+    }
     return;
   }
   if (entry.isDirectory && entry.createReader) {
     const reader = entry.createReader();
     while (true) {
-      const children = await new Promise<LegacyEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
-      if (!children.length) break;
-      for (let index = 0; index < children.length; index += DISCOVERY_CONCURRENCY) {
-        await Promise.all(
-          children
-            .slice(index, index + DISCOVERY_CONCURRENCY)
-            .map((child) => walkLegacyEntry(child, path, visitFile)),
-        );
+      try {
+        const children = await new Promise<LegacyEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+        if (!children.length) break;
+        for (let index = 0; index < children.length; index += DISCOVERY_CONCURRENCY) {
+          await Promise.all(
+            children
+              .slice(index, index + DISCOVERY_CONCURRENCY)
+              .map((child) => walkLegacyEntry(child, path, visitFile).catch(() => {})),
+          );
+        }
+      } catch {
+        break;
       }
     }
   }
@@ -1130,6 +1434,17 @@ async function walkLegacyEntry(
 function isSupportedFileName(name: string): boolean {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
   return TEXT_TYPES.has(extension) || BINARY_TYPES.has(extension);
+}
+
+function isIgnoredDirectoryName(name: string): boolean {
+  return name.startsWith(".") || IGNORED_DIRECTORIES.has(name.toLowerCase());
+}
+
+function isIgnoredPath(path: string): boolean {
+  const parts = path.split("/").filter(Boolean);
+  return parts.some((part, index) => index < parts.length - 1
+    ? isIgnoredDirectoryName(part)
+    : part.startsWith("."));
 }
 
 function prepareDemoEntries(files: UploadFile[]): ScanEntry[] {
@@ -1146,10 +1461,12 @@ function makeUploadBatches(entries: ScanEntry[]): ScanEntry[][] {
   const batches: ScanEntry[][] = [];
   let current: ScanEntry[] = [];
   let bytes = 0;
+  // Bounded safe raw upload limit: 3.5 MB per batch so base64 payload is ~4.6 MB, well below server limits
+  const MAX_BATCH_BYTES = 3.5 * 1024 * 1024;
   for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
     const entry = entries[entryIndex];
     const estimated = Math.min(entry.size, 8 * 1024 * 1024);
-    if (current.length >= 6 || (current.length > 0 && bytes + estimated > 6 * 1024 * 1024)) {
+    if (current.length >= 6 || (current.length > 0 && bytes + estimated > MAX_BATCH_BYTES)) {
       batches.push(current);
       current = [];
       bytes = 0;

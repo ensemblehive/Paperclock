@@ -60,7 +60,11 @@ class ExtractorTests(unittest.TestCase):
     def test_scan_reports_noise_and_skipped_files(self) -> None:
         result = scan_files(
             [
-                {"path": "a.txt", "content": "Renew before 2026-09-01.", "encoding": "text"},
+                {
+                    "path": "a.eml",
+                    "content": "Subject: Insurance renewal\n\nYour insurance policy renews before 2026-09-01.",
+                    "encoding": "text",
+                },
                 {"path": "photo.jpg", "content": "", "encoding": "text"},
             ],
             today=self.today,

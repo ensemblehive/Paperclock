@@ -40,7 +40,13 @@ const worker = {
       }, allowedWidths);
     }
 
-    return handler.fetch(request, env, ctx);
+    const response = await handler.fetch(request, env, ctx);
+    const secured = new Response(response.body, response);
+    secured.headers.set("X-Content-Type-Options", "nosniff");
+    secured.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+    secured.headers.set("X-Frame-Options", "DENY");
+    secured.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+    return secured;
   },
 };
 

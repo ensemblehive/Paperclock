@@ -1,147 +1,144 @@
 <p align="center">
-  <img src="docs/social-preview.png" alt="Paperclock — Your files know what's coming" width="900">
+  <img src="public/og.png" alt="Paperclock — Your files know what's coming" width="900">
 </p>
 
-# Paperclock
+# Paperclock ⏳
 
-Paperclock is a private deadline radar for the commitments hiding in your files.
-Drop in a folder and it finds renewals, cancellation windows, expiries, payments,
-submissions, appointments, and warranties—then turns them into one explainable
-timeline and an `.ics` calendar.
+> **A private, on-device deadline radar for the commitments hiding in your files.**  
+> Drop in a folder, and Paperclock extracts renewals, cancellation windows, expiries, tax filings, payments, appointments, and warranties—then turns them into an interactive timeline and a standard `.ics` calendar.
 
-Paperclock is a product of Ensemble Hive.
+---
 
-No account. No document upload. No model download. The Python engine runs on your
-machine and every result shows the source location and why it was kept.
+> [!NOTE]
+> **Project Status: Early Development**  
+> Paperclock is in active, early-stage development. The engine and extraction heuristics are being continuously improved and expanded with new format readers, domain recognizers, and platform features. Feedback and contributions are welcome!
 
-> **Demo GIF placeholder:** a short folder-drop → timeline → calendar export recording belongs here.
+---
 
-## Why this exists
+## 🧭 What Paperclock Is (and What It Is Not)
 
-Important dates rarely live in calendars. They live in policy PDFs, warranty
-emails, contracts, project notes, and receipts. Search finds dates, but it cannot
-tell an invoice date from a cancellation deadline. Cloud document assistants can,
-but sending an entire personal or company folder to one is often a non-starter.
+### ✅ What It Is
+- **100% Local & Zero-Knowledge**: Runs entirely on your local machine. No accounts, no cloud APIs, and zero document uploads.
+- **Deterministic & Explainable**: Every detected deadline links to the exact source file, line/page number, and the clause context that triggered it.
+- **Cross-Platform On-Device OCR**: Reads digital documents as well as scanned image-only PDFs and photos/receipts (`.png`, `.jpg`, `.jpeg`, `.webp`, `.tiff`) using lightweight local ONNX models.
+- **Smart Filtering**: Applies a 4-stage deterministic gating pipeline (path pruning, document allowlisting, multi-term domain corroboration, and temporal clause validation) to filter out historical dates and example text.
+- **Bank Statement Reconciliation**: Automatically parses transaction statements (`.csv`, `.xlsx`, tabular `.pdf`), balances income vs expenses, detects recurring debits, and verifies running arithmetic.
+- **Calendar Ready**: Exports clean `.ics` calendar files with configurable 7-day and 1-day reminder alarms.
 
-Paperclock sits in the useful middle: local, small, deterministic, and good at
-answering one question—*what in this folder might cost me if I forget it?*
+### ❌ What It Is Not
+- **Not a Cloud Service**: Your files never leave your device.
+- **Not a Generative LLM**: It does not summarize prose or hallucinate imaginary dates.
+- **Not a Generic Desktop Search Tool**: It specifically answers one question: *“What in this folder might cost me money, legal standing, or coverage if I forget it?”*
+- **Not Legal or Financial Advice**: Paperclock is a radar to flag deadlines; always review the original document before taking action.
 
-## Run it
+---
 
-You need Python 3.11+ and Node 22+.
+## 📂 Supported Formats
+
+- **PDF Documents**: Native text PDFs as well as scanned image-only PDFs (with automatic 150 DPI OCR fallback).
+- **Images & Scans**: `.png`, `.jpg`, `.jpeg`, `.webp`, `.tiff` (processed via on-device RapidOCR).
+- **Word & Office**: `.docx` and Apple `.pages` documents with preview data.
+- **Email & Messages**: `.eml` files and Outlook `.msg` containers.
+- **Spreadsheets & Data**: `.csv`, `.xlsx`, and tabular bank statements.
+
+*Files up to 8 MB per document are supported with bounded memory streaming.*
+
+---
+
+## 🚀 Quickstart
+
+### Prerequisites
+- **Python**: 3.11 or newer
+- **Node.js**: 22.13 or newer
+
+### 1. Run Everything (Web UI + Engine)
 
 ```bash
 ./run.sh
 ```
 
-Open [http://localhost:3000](http://localhost:3000), drop a folder, or click the
-10-second demo. Folder scans have no file-count ceiling: files are indexed first,
-then read in bounded batches so memory stays predictable. The first run creates
-`.venv/` and installs the one Python parsing dependency plus the UI packages, all
-inside this project.
+Open [http://localhost:3000](http://localhost:3000) in your browser. Drop any folder or run the built-in 10-second demo.
 
-Prefer a terminal?
+### 2. Command-Line Interface (CLI)
+
+Prefer running from the terminal?
 
 ```bash
+# Scan a folder of policies or contracts
 .venv/bin/paperclock scan ~/Documents/Policies
-.venv/bin/paperclock scan ~/Documents/Policies --calendar deadlines.ics --json
+
+# Scan and export directly to a calendar file
+.venv/bin/paperclock scan ~/Documents/Policies --calendar deadlines.ics
+
+# Output structured JSON
+.venv/bin/paperclock scan ~/Documents/Policies --json
 ```
 
-## What it reads
+---
 
-- PDF and DOCX
-- email (`.eml`) and calendar (`.ics`)
-- Markdown, plain text, CSV, JSON, YAML, TOML, HTML, XML, RTF, and logs
-
-Individual files are capped at 8 MB as a safety guard, but the folder itself can
-contain any number of files. Unsupported, oversized, and unreadable files are
-skipped with a visible reason.
-
-## How it works
-
-The browser acknowledges a selection immediately, then checks file names in small
-yielding chunks. Large file encoding runs inside a dedicated browser worker with
-byte-level progress, keeping the interface and its animations responsive.
-Dropped folders are traversed recursively through the browser's directory-entry
-API; the folder picker is available as a compatibility fallback.
-On supporting browsers, Paperclock uses a directory handle instead of waiting for
-the browser to flatten the whole folder before returning control to the page.
-The first status frame is painted before enumeration begins, supported files are
-filtered before metadata reads, and directory metadata is fetched with bounded
-concurrency so very large selections never monopolize the interface.
-
-The browser sends a lightweight manifest in chunks. Python checks its local SQLite
-index, immediately restores unchanged results, and reads only new or modified files
-through a bounded worker pool. Results stream into the timeline batch by batch with
-real counts, speed, estimated time, current file, and cache hits. A scan can be
-paused and resumed without throwing away completed work.
-
-The extraction pipeline recognizes explicit and relative dates, scores nearby
-language for action words, down-ranks historical metadata, explains each decision,
-and removes duplicates. A small deterministic title cleaner turns raw sentences
-into labels such as “Health Insurance Renewal,” while the untouched excerpt stays
-available for inspection. Dates from one source are grouped as milestones beneath
-one document card. Each milestone can be selected, exported alone, or opened in
-the original local file; PDF results retain their page number. Numeric dates are
-never guessed silently: choose day-first or month-first in the interface, and
-ambiguous results stay marked.
-
-There is no trained model and no telemetry. [`pypdf`](https://pypi.org/project/pypdf/)
-is the only Python dependency; PDF parsing is the one piece not worth reinventing.
+## ⚙️ Architecture
 
 ```text
-browser folder picker
+Local Folder / Drag & Drop
         │
-        ├── chunked manifest ── local SQLite index ── unchanged results
+        ├── Chunked Browser Manifest ── Local SQLite Index (Cache Hits)
         │
-        └── bounded file batches ── Python reader pool
-                                      │
-                                      └── live timeline / .ics export
+        └── Bounded File Batches ── Multi-Threaded Python Engine
+                                      ├── Precision-Gated Timeline & .ics
+                                      ├── RapidOCR Engine (Scans / Images)
+                                      └── Statement Reconciliation Engine
 ```
 
-## Project map
+- **Frontend**: React + TypeScript client with a Web Worker for non-blocking file hashing and preparation.
+- **Backend Engine**: Python HTTP loopback service running bounded worker threads (`paperclock/server.py`).
+- **Storage**: Private local SQLite database (`~/.paperclock/index.sqlite3`) with WAL mode for instant resumable scans.
 
-```text
-paperclock/          Python engine, readers, scan index, server, CLI, calendar export
-app/                 small React interface
-tests/               Python behavior tests + production bundle smoke test
-public/              static brand assets
-run.sh               one-command local launcher
-```
+---
 
-## Development
+## 🔒 Security & Privacy
+
+Paperclock is designed with a defense-in-depth local security model:
+
+- **Loopback Enforcement**: The engine binds exclusively to `127.0.0.1` and strictly validates `Host` and `Origin` headers.
+- **Anti-Exploitation**: XML entities are disabled (`defusedxml`), and compressed archives enforce strict decompressed byte limits (`32 MB` max, `200:1` max ratio) to prevent zip bombs.
+- **Data Isolation**: Local database files are restricted to the active operating system user (`0o600` / `0o700` permissions).
+- **Safe Calendar Outputs**: Event descriptions and summaries are escaped to prevent CRLF and iCalendar injection.
+
+See [SECURITY.md](SECURITY.md) for our security policy.
+
+---
+
+## 🛠️ Development & Testing
 
 ```bash
+# Set up Python virtual environment
 python3 -m venv .venv
 .venv/bin/pip install -e .
+
+# Install frontend dependencies
 npm install
 
-# terminal 1: Python engine
-.venv/bin/paperclock serve
-
-# terminal 2: interface
-npm run dev
-
-# everything that should pass before a PR
+# Run the test suite (Python + Frontend)
 npm test
+
+# Run linter
 npm run lint
 ```
 
-Adding a date form usually means one focused change in
-[`paperclock/extractor.py`](paperclock/extractor.py) and one test. Readers are
-isolated in [`paperclock/readers.py`](paperclock/readers.py). See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the short contribution guide.
+---
 
-## Honest limitations
+## 🗺️ Roadmap
 
-- Scanned or image-only PDFs need OCR first.
-- Relative phrases use the file modification time as their anchor; copied files
-  can therefore deserve a manual check.
-- Browsers cannot reopen a folder after a full page refresh without permission.
-  Choose the same folder again and Paperclock will reuse its indexed work.
-- Paperclock is a radar, not legal or financial advice. Confirm the source before
-  acting on a date.
+- [x] Cross-platform lightweight OCR for images and scanned PDFs
+- [x] Bank statement debit/credit parsing and reconciliation
+- [x] Date ambiguity picker ($DD/MM$ vs $MM/DD$)
+- [ ] Standalone native desktop app packaging (macOS `.dmg` & Windows `.msi`)
+- [ ] Background folder watcher ("Radar Daemon" for `~/Downloads` and `~/Documents`)
+- [ ] Direct Apple Reminders / Google Calendar 1-click sync
+- [ ] User custom rules & deadline dismissal management
 
-## License
+---
 
-MIT. See [`LICENSE`](LICENSE).
+## 📄 License
+
+Paperclock is licensed under the [MIT License](LICENSE).
