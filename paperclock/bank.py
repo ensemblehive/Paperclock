@@ -13,7 +13,7 @@ CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "Salary & Income": ("salary", "payroll", "wage", "stipend", "bonus", "dividend", "interest credit", "direct dep", "neft cr", "ach credit"),
     "Rent & Housing": ("rent", "landlord", "society maint", "maintenance fee", "hoa dues", "property tax"),
     "Utilities & Bills": ("electricity", "power", "water board", "gas bill", "broadband", "fiber", "airtel", "jio", "verizon", "utility", "billdesk"),
-    "Subscriptions": ("netflix", "spotify", "apple.com", "prime", "youtube", "github", "google one", "hotstar", "adobe", "openai", "icloud", "dropbox"),
+    "Subscriptions": ("netflix", "spotify", "apple.com", "prime", "youtube", "github", "google one", "hotstar", "adobe", "icloud", "dropbox"),
     "Food & Groceries": ("swiggy", "zomato", "blinkit", "zepto", "instamart", "uber eats", "doordash", "supermarket", "grocery", "restaurant", "cafe"),
     "Shopping": ("amazon", "flipkart", "myntra", "target", "walmart", "apple store", "paypal", "ebay", "retail", "pos purchase"),
     "Travel & Commute": ("uber", "ola", "lyft", "flight", "airline", "irctc", "railway", "petrol", "fuel", "shell", "metro", "toll", "fastag", "parking"),
